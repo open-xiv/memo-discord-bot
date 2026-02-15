@@ -1,0 +1,9 @@
+{
+  "name": "server",
+  "private": true,
+  "scripts": {
+    "dev": "go run .",
+    "build": "go build -o build/server .",
+    "lint": "golangci-lint run"
+  }
+}

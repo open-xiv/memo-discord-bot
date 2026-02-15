@@ -1,0 +1,15 @@
+# Build
+build/
+
+# Secrets
+config/secrets.yaml
+
+# Database
+sql/
+
+# Mac
+.DS_Store
+
+# Editor
+.vscode/
+.idea/

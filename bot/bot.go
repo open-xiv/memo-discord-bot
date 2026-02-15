@@ -1,0 +1,257 @@
+package bot
+
+import (
+	"fmt"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/open-xiv/memo-discord-bot/flow"
+	"github.com/open-xiv/memo-discord-bot/model"
+	"github.com/rs/zerolog/log"
+)
+
+var CommandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
+
+func Start() {
+	s := flow.Discord
+
+	// handlers
+	RegisterBindHandlers()
+	RegisterLogsHandlers()
+	RegisterSyncHandlers()
+
+	// component handlers
+	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		switch i.Type {
+		case discordgo.InteractionApplicationCommand:
+			// slash
+			if h, ok := CommandHandlers[i.ApplicationCommandData().Name]; ok {
+				h(s, i)
+			}
+		case discordgo.InteractionMessageComponent:
+			// components
+			handleComponentInteraction(s, i)
+		case discordgo.InteractionModalSubmit:
+			// modal
+			handleModalSubmit(s, i)
+		case discordgo.InteractionApplicationCommandAutocomplete:
+			// autocomplete
+			handleAutocomplete(s, i)
+		}
+	})
+
+	// register ready handler
+	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
+		log.Info().Msgf("discord bot session start (%s)", r.User.String())
+	})
+
+	// connect to Discord
+	err := s.Open()
+	if err != nil {
+		log.Fatal().Err(err).Msg("discord bot connect failed")
+	}
+
+	// slash commands
+	removeGlobalCommands(s)
+	registerCommands(s)
+}
+
+func removeGlobalCommands(s *discordgo.Session) {
+	commands, err := s.ApplicationCommands(s.State.User.ID, "")
+	if err != nil {
+		log.Error().Err(err).Msg("global command fetch failed")
+		return
+	}
+
+	for _, cmd := range commands {
+		err := s.ApplicationCommandDelete(s.State.User.ID, "", cmd.ID)
+		if err != nil {
+			log.Error().Err(err).Msgf("global command delete failed (%s)", cmd.Name)
+		} else {
+			log.Info().Msgf("global command deleted (%s)", cmd.Name)
+		}
+	}
+}
+
+func registerCommands(s *discordgo.Session) {
+	for _, cmd := range Commands {
+		_, err := s.ApplicationCommandCreate(s.State.User.ID, GuildID, cmd)
+		if err != nil {
+			log.Error().Err(err).Msgf("discord bot command registration failed (%s)", cmd.Name)
+		} else {
+			log.Info().Err(err).Msgf("discord bot command register (%s)", cmd.Name)
+		}
+	}
+}
+
+func handleComponentInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+
+	switch data.CustomID {
+	case "unbind_select":
+		handleUnbindSelect(s, i)
+	case "hidden_select":
+		handleHiddenSelect(s, i)
+	case "logs_update", "logs_cancel":
+		handleLogsButton(s, i)
+	}
+}
+
+func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+
+	if len(data.Values) == 0 {
+		return
+	}
+
+	memberID := data.Values[0]
+	discordID := i.Member.User.ID
+
+	// 1. find user
+	var user model.User
+	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
+	if err != nil {
+		respondError(s, i, "目前没有绑定的角色 使用 `/bind` 绑定一个角色")
+		return
+	}
+
+	// 2. find member
+	var member model.Member
+	err = flow.DB.First(&member, memberID).Error
+	if err != nil {
+		respondError(s, i, "角色不存在")
+		return
+	}
+
+	// 3. unbind member
+	err = flow.DB.Model(&user).Association("Members").Delete(&member)
+	if err != nil {
+		log.Error().Err(err).Msgf("user unbind failed [%s@%s]", member.Name, member.Server)
+		respondError(s, i, "无法解绑角色 内部错误")
+		return
+	}
+
+	// 4. respond
+	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    fmt.Sprintf("✅ 解绑成功 %s@%s", member.Name, member.Server),
+			Components: []discordgo.MessageComponent{},
+		},
+	})
+	if err != nil {
+		return
+	}
+
+	log.Info().Msgf("user unbind success [%s -> %s@%s]", discordID, member.Name, member.Server)
+}
+
+func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+
+	if len(data.Values) == 0 {
+		return
+	}
+
+	memberID := data.Values[0]
+	discordID := i.Member.User.ID
+
+	// 1. find user
+	var user model.User
+	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
+	if err != nil {
+		respondError(s, i, "目前没有绑定的角色 使用 `/bind` 绑定一个角色")
+		return
+	}
+
+	// 2. find member
+	var member model.Member
+	err = flow.DB.First(&member, memberID).Error
+	if err != nil {
+		respondError(s, i, "角色不存在")
+		return
+	}
+
+	// 3. verify user owns this member
+	var existingCount int64
+	flow.DB.Table("user_members").
+		Where("user_id = ? AND member_id = ?", user.ID, member.ID).
+		Count(&existingCount)
+
+	if existingCount == 0 {
+		respondError(s, i, "你没有绑定这个角色")
+		return
+	}
+
+	// 4. toggle hidden status
+	newHiddenStatus := !member.Hidden
+	err = flow.DB.Model(&member).Update("hidden", newHiddenStatus).Error
+	if err != nil {
+		log.Error().Err(err).Msgf("toggle hidden status failed [%s@%s]", member.Name, member.Server)
+		respondError(s, i, "无法修改隐藏状态 内部错误")
+		return
+	}
+
+	// 5. respond
+	statusText := "显示"
+	if newHiddenStatus {
+		statusText = "隐藏"
+	}
+
+	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    fmt.Sprintf("✅ 已将 %s@%s 设为 %s", member.Name, member.Server, statusText),
+			Components: []discordgo.MessageComponent{},
+		},
+	})
+	if err != nil {
+		return
+	}
+
+	log.Info().Msgf("toggle hidden status success [%s -> %s@%s: %v]", discordID, member.Name, member.Server, newHiddenStatus)
+}
+
+func handleModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.ModalSubmitData()
+
+	switch data.CustomID {
+	case "logs_modal":
+		handleLogsModal(s, i)
+	}
+}
+
+func respondSuccess(s *discordgo.Session, i *discordgo.InteractionCreate, message string) {
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("✅ %s", message),
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	})
+	if err != nil {
+		return
+	}
+}
+
+func respondError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) {
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("❌ %s", message),
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	})
+	if err != nil {
+		return
+	}
+}
+
+func Stop() {
+	if flow.Discord != nil {
+		err := flow.Discord.Close()
+		if err != nil {
+			return
+		}
+		log.Info().Msg("discord bot session closed")
+	}
+}

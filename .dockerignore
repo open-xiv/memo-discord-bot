@@ -1,0 +1,14 @@
+# flyctl launch added from .gitignore
+**/build
+**/tmp
+
+# flyctl launch added from .idea/.gitignore
+# default ignored files
+.idea/shelf
+.idea/workspace.xml
+# editor-based HTTP Client requests
+.idea/httpRequests
+# datasource local storage ignored files
+.idea/dataSources
+.idea/dataSources.local.xml
+fly.toml
