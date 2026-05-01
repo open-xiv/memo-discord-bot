@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +11,8 @@ import (
 	"github.com/open-xiv/memo-discord-bot/bot"
 	"github.com/open-xiv/memo-discord-bot/flow"
 	"github.com/open-xiv/memo-discord-bot/logger"
+	"github.com/open-xiv/memo-discord-bot/metrics"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 )
 
@@ -31,8 +34,17 @@ func main() {
 		r := gin.New()
 		r.Use(gin.Recovery())
 
+		// HTTP request counter — labels (path, method, code).
+		r.Use(func(c *gin.Context) {
+			c.Next()
+			metrics.HTTPRequestsTotal.WithLabelValues(
+				c.FullPath(), c.Request.Method, strconv.Itoa(c.Writer.Status()),
+			).Inc()
+		})
+
 		r.GET("/", api.Status)
 		r.GET("/status", api.Status)
+		r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 		if err := r.Run(":8080"); err != nil {
 			log.Fatal().Msgf("failed to run server: %v", err)
