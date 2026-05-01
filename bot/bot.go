@@ -5,6 +5,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/open-xiv/memo-discord-bot/flow"
+	"github.com/open-xiv/memo-discord-bot/metrics"
 	"github.com/open-xiv/memo-discord-bot/model"
 	"github.com/rs/zerolog/log"
 )
@@ -24,24 +25,43 @@ func Start() {
 		switch i.Type {
 		case discordgo.InteractionApplicationCommand:
 			// slash
-			if h, ok := CommandHandlers[i.ApplicationCommandData().Name]; ok {
+			name := i.ApplicationCommandData().Name
+			metrics.InteractionsTotal.WithLabelValues("app_command", name).Inc()
+			if h, ok := CommandHandlers[name]; ok {
 				h(s, i)
 			}
 		case discordgo.InteractionMessageComponent:
 			// components
+			metrics.InteractionsTotal.WithLabelValues("component", "").Inc()
 			handleComponentInteraction(s, i)
 		case discordgo.InteractionModalSubmit:
 			// modal
+			metrics.InteractionsTotal.WithLabelValues("modal", "").Inc()
 			handleModalSubmit(s, i)
 		case discordgo.InteractionApplicationCommandAutocomplete:
 			// autocomplete
+			metrics.InteractionsTotal.WithLabelValues("autocomplete", i.ApplicationCommandData().Name).Inc()
 			handleAutocomplete(s, i)
 		}
 	})
 
 	// register ready handler
 	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
+		metrics.SessionEvents.WithLabelValues("ready").Inc()
 		log.Info().Msgf("discord bot session start (%s)", r.User.String())
+	})
+
+	// gateway resilience signals — useful when the bot stops responding,
+	// usually correlates with a Disconnect spike.
+	s.AddHandler(func(s *discordgo.Session, _ *discordgo.Disconnect) {
+		metrics.SessionEvents.WithLabelValues("disconnect").Inc()
+	})
+	s.AddHandler(func(s *discordgo.Session, _ *discordgo.Resumed) {
+		metrics.SessionEvents.WithLabelValues("resume").Inc()
+	})
+	s.AddHandler(func(s *discordgo.Session, e *discordgo.RateLimit) {
+		metrics.SessionEvents.WithLabelValues("rate_limited").Inc()
+		log.Warn().Str("url", e.URL).Msg("discord rate limit hit")
 	})
 
 	// connect to Discord
