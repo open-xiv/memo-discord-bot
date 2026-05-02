@@ -46,6 +46,9 @@ func main() {
 		r.GET("/status", api.Status)
 		r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
+		// inbound webhooks: /webhook/gha, /webhook/github
+		api.RegisterWebhooks(r)
+
 		if err := r.Run(":8080"); err != nil {
 			log.Fatal().Msgf("failed to run server: %v", err)
 		}
