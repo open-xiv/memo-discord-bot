@@ -20,6 +20,12 @@ func Start() {
 	RegisterLogsHandlers()
 	RegisterSyncHandlers()
 
+	// pre-create metric label series at 0 so PromQL increase() over a window
+	// has both endpoints from the start — without this the series is born at
+	// value=1 on first use and `increase()` returns 0 until the second call.
+	warmInteractionLabels()
+	warmSessionEventLabels()
+
 	// component handlers
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		switch i.Type {
@@ -73,6 +79,23 @@ func Start() {
 	// slash commands
 	removeGlobalCommands(s)
 	registerCommands(s)
+}
+
+func warmInteractionLabels() {
+	// type=app_command,autocomplete — keyed by command name
+	for _, cmd := range Commands {
+		metrics.InteractionsTotal.WithLabelValues("app_command", cmd.Name).Add(0)
+		metrics.InteractionsTotal.WithLabelValues("autocomplete", cmd.Name).Add(0)
+	}
+	// type=component,modal — name is always empty in our dispatcher
+	metrics.InteractionsTotal.WithLabelValues("component", "").Add(0)
+	metrics.InteractionsTotal.WithLabelValues("modal", "").Add(0)
+}
+
+func warmSessionEventLabels() {
+	for _, ev := range []string{"ready", "disconnect", "resume", "rate_limited"} {
+		metrics.SessionEvents.WithLabelValues(ev).Add(0)
+	}
 }
 
 func removeGlobalCommands(s *discordgo.Session) {
