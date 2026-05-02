@@ -37,4 +37,17 @@ var (
 		},
 		[]string{"event"},
 	)
+
+	// WebhooksTotal — inbound webhook deliveries grouped by source path
+	// (gha / github / ...), event name when known (e.g. release / push for
+	// GitHub; "deploy" for our GHA notifier), and disposition status
+	// (ok / unauthorized / duplicate / ignored / read_error / send_error /
+	// bad_request / error).
+	WebhooksTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bot_webhooks_total",
+			Help: "Inbound webhook deliveries handled by the bot",
+		},
+		[]string{"source", "event", "status"},
+	)
 )
