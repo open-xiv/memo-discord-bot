@@ -166,7 +166,7 @@ func handleGHA(c *gin.Context) {
 }
 
 // buildDeployEmbed renders a GHA deploy notification as the unified
-// "## 🌟/🥀 {Service} Deploy" markdown card. Title text is empty — all
+// "### 🌟/🥀 {Service} Deploy" markdown card. Title text is empty — all
 // content lives in Description so the markdown heading + 🩷 section
 // labels render cleanly. Color stripe doubles up as a status signal so
 // users on mobile (where the emoji is small) still get a glance read.
@@ -178,7 +178,7 @@ func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
 		color = notifier.ColorFailure
 	}
 
-	heading := fmt.Sprintf("## %s %s Deploy", emoji, p.Service)
+	heading := fmt.Sprintf("### %s %s Deploy", emoji, p.Service)
 
 	// On failure, point out which leg burned so the eye doesn't have to
 	// click through to GHA to triage. Slotted right under the heading.
@@ -205,9 +205,9 @@ func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
 		cluster = "?"
 	}
 
-	// Commit & Run line. <t:UNIX:R> renders as relative localized time
-	// for each viewer ("2 minutes ago"). Skip the commit link if we
-	// don't have a URL — show short SHA as plain text instead.
+	// Commit line. <t:UNIX:R> renders as relative localized time for each
+	// viewer ("2 minutes ago"). Skip the commit link if we don't have a
+	// URL — show short SHA as plain text instead.
 	short := p.Commit
 	if len(short) > 7 {
 		short = short[:7]
@@ -222,23 +222,20 @@ func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
 		commitPart = "_(no commit)_"
 	}
 	timePart := fmt.Sprintf("<t:%d:R>", time.Now().Unix())
-	runPart := ""
-	if p.RunURL != "" {
-		runPart = fmt.Sprintf(" [Run](%s)", p.RunURL)
-	}
 
 	desc := fmt.Sprintf(
-		"%s%s\n\n🩷 **Version**\n`%s`\n\n🩷 **Server**\n`%s`\n\n🩷 **Commit & Run**\n%s %s%s",
+		"%s%s\n\n🩷 **Version**\n`%s`\n\n🩷 **Server**\n`%s`\n\n🩷 **Commit**\n%s %s",
 		heading, failNote,
 		version,
 		cluster,
-		commitPart, timePart, runPart,
+		commitPart, timePart,
 	)
 
+	// No embed.Timestamp — the relative <t:UNIX:R> in the body covers it
+	// and the absolute footer time was visual noise.
 	return &discordgo.MessageEmbed{
 		Description: desc,
 		Color:       color,
-		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
