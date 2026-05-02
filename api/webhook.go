@@ -117,17 +117,16 @@ func webhookMiddleware() gin.HandlerFunc {
 // ----------------------------------------------------------------------
 
 type ghaPayload struct {
-	Service string `json:"service"`
-	Tag     string `json:"tag"`
-	Cluster string `json:"cluster"`
-	Status  string `json:"status"` // "success" | "failure"
-	Build   string `json:"build"`  // result of build job
-	Deploy  string `json:"deploy"` // result of deploy job
-	Commit  string `json:"commit"`
-	Title   string `json:"title"`
-	Actor   string `json:"actor"`
-	RunURL  string `json:"run_url"`
-	Ref     string `json:"ref"`
+	Service   string `json:"service"`
+	Version   string `json:"version"` // git describe → "v7.5.0.0" or "v7.5.0.0+3"
+	Tag       string `json:"tag"`     // image tag, e.g. "sha-9cfe074"
+	Cluster   string `json:"cluster"`
+	Status    string `json:"status"` // "success" | "failure"
+	Build     string `json:"build"`  // result of build job (success / failure / cancelled / skipped)
+	Deploy    string `json:"deploy"` // result of deploy job
+	Commit    string `json:"commit"`
+	CommitURL string `json:"commit_url"`
+	RunURL    string `json:"run_url"`
 }
 
 func handleGHA(c *gin.Context) {
@@ -153,72 +152,7 @@ func handleGHA(c *gin.Context) {
 	}
 	c.Set("webhook.event", "deploy")
 
-	// Build the embed.
-	emoji := "✅"
-	color := notifier.ColorSuccess
-	verb := "deployed"
-	if p.Status != "success" {
-		emoji = "❌"
-		color = notifier.ColorFailure
-		// Be specific about which leg failed when we can.
-		switch {
-		case p.Build != "" && p.Build != "success":
-			verb = fmt.Sprintf("build failed (%s)", p.Build)
-		case p.Deploy != "" && p.Deploy != "success":
-			verb = fmt.Sprintf("deploy failed (%s)", p.Deploy)
-		default:
-			verb = "deploy failed"
-		}
-	}
-
-	cluster := p.Cluster
-	if cluster == "" {
-		cluster = "?"
-	}
-	tag := p.Tag
-	if tag == "" {
-		tag = "(no image)"
-	}
-
-	title := fmt.Sprintf("%s %s %s", emoji, p.Service, verb)
-	desc := fmt.Sprintf("`%s` · cluster: `%s`", tag, cluster)
-	if p.Title != "" {
-		desc += "\n" + truncate(p.Title, 200)
-	}
-
-	fields := []*discordgo.MessageEmbedField{}
-	if p.Commit != "" {
-		shortSHA := p.Commit
-		if len(shortSHA) > 7 {
-			shortSHA = shortSHA[:7]
-		}
-		fields = append(fields, &discordgo.MessageEmbedField{
-			Name: "Commit", Value: shortSHA, Inline: true,
-		})
-	}
-	if p.Actor != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{
-			Name: "Author", Value: p.Actor, Inline: true,
-		})
-	}
-	if p.Ref != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{
-			Name: "Ref", Value: p.Ref, Inline: true,
-		})
-	}
-	if p.RunURL != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{
-			Name: "Run", Value: "[GitHub Actions](" + p.RunURL + ")", Inline: false,
-		})
-	}
-
-	embed := &discordgo.MessageEmbed{
-		Title:       title,
-		Description: desc,
-		Color:       color,
-		Fields:      fields,
-		Timestamp:   time.Now().UTC().Format(time.RFC3339),
-	}
+	embed := buildDeployEmbed(p)
 
 	if _, err := notifier.SendEmbed(bot.DevChannelID, embed); err != nil {
 		log.Error().Err(err).Msg("send gha embed failed")
@@ -226,9 +160,86 @@ func handleGHA(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "send failed"})
 		return
 	}
-	log.Info().Str("service", p.Service).Str("tag", tag).Str("status", p.Status).
-		Msg("gha webhook posted")
+	log.Info().Str("service", p.Service).Str("version", p.Version).
+		Str("status", p.Status).Msg("gha webhook posted")
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// buildDeployEmbed renders a GHA deploy notification as the unified
+// "## 🌟/🥀 {Service} Deploy" markdown card. Title text is empty — all
+// content lives in Description so the markdown heading + 🩷 section
+// labels render cleanly. Color stripe doubles up as a status signal so
+// users on mobile (where the emoji is small) still get a glance read.
+func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
+	emoji := "🌟"
+	color := notifier.ColorSuccess
+	if p.Status != "success" {
+		emoji = "🥀"
+		color = notifier.ColorFailure
+	}
+
+	heading := fmt.Sprintf("## %s %s Deploy", emoji, p.Service)
+
+	// On failure, point out which leg burned so the eye doesn't have to
+	// click through to GHA to triage. Slotted right under the heading.
+	failNote := ""
+	if p.Status != "success" {
+		switch {
+		case p.Build != "" && p.Build != "success":
+			failNote = fmt.Sprintf("\n_build %s_", p.Build)
+		case p.Deploy != "" && p.Deploy != "success":
+			failNote = fmt.Sprintf("\n_deploy %s_", p.Deploy)
+		}
+	}
+
+	version := p.Version
+	if version == "" {
+		version = p.Tag // fall back to image tag if version missing
+	}
+	if version == "" {
+		version = "(unknown)"
+	}
+
+	cluster := p.Cluster
+	if cluster == "" {
+		cluster = "?"
+	}
+
+	// Commit & Run line. <t:UNIX:R> renders as relative localized time
+	// for each viewer ("2 minutes ago"). Skip the commit link if we
+	// don't have a URL — show short SHA as plain text instead.
+	short := p.Commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	var commitPart string
+	switch {
+	case short != "" && p.CommitURL != "":
+		commitPart = fmt.Sprintf("[%s](%s)", short, p.CommitURL)
+	case short != "":
+		commitPart = "`" + short + "`"
+	default:
+		commitPart = "_(no commit)_"
+	}
+	timePart := fmt.Sprintf("<t:%d:R>", time.Now().Unix())
+	runPart := ""
+	if p.RunURL != "" {
+		runPart = fmt.Sprintf(" [Run](%s)", p.RunURL)
+	}
+
+	desc := fmt.Sprintf(
+		"%s%s\n\n🩷 **Version**\n`%s`\n\n🩷 **Server**\n`%s`\n\n🩷 **Commit & Run**\n%s %s%s",
+		heading, failNote,
+		version,
+		cluster,
+		commitPart, timePart, runPart,
+	)
+
+	return &discordgo.MessageEmbed{
+		Description: desc,
+		Color:       color,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 // ----------------------------------------------------------------------
