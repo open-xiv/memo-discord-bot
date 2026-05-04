@@ -117,16 +117,17 @@ func webhookMiddleware() gin.HandlerFunc {
 // ----------------------------------------------------------------------
 
 type ghaPayload struct {
-	Service   string `json:"service"`
-	Version   string `json:"version"` // git describe → "v7.5.0.0" or "v7.5.0.0+3"
-	Tag       string `json:"tag"`     // image tag, e.g. "sha-9cfe074"
-	Cluster   string `json:"cluster"`
-	Status    string `json:"status"` // "success" | "failure"
-	Build     string `json:"build"`  // result of build job (success / failure / cancelled / skipped)
-	Deploy    string `json:"deploy"` // result of deploy job
-	Commit    string `json:"commit"`
-	CommitURL string `json:"commit_url"`
-	RunURL    string `json:"run_url"`
+	Service      string `json:"service"`
+	Version      string `json:"version"` // git describe → "v7.5.0.0" or "v7.5.0.0+3"
+	Tag          string `json:"tag"`     // image tag, e.g. "sha-9cfe074"
+	Cluster      string `json:"cluster"`
+	Status       string `json:"status"` // "success" / "failure" / "in_progress" / "rollback"
+	Build        string `json:"build"`  // result of build job (success / failure / cancelled / skipped)
+	Deploy       string `json:"deploy"` // result of deploy job
+	Commit       string `json:"commit"`
+	CommitURL    string `json:"commit_url"`
+	RunURL       string `json:"run_url"`
+	RepoFullName string `json:"repo_full_name"` // "open-xiv/memo-discord-bot"
 }
 
 func handleGHA(c *gin.Context) {
@@ -165,30 +166,44 @@ func handleGHA(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// buildDeployEmbed renders a GHA deploy notification as the unified
-// "### 🌟/🥀 {Service} Deploy" markdown card. Title text is empty — all
-// content lives in Description so the markdown heading + 🩷 section
-// labels render cleanly. Color stripe doubles up as a status signal so
-// users on mobile (where the emoji is small) still get a glance read.
+// deployStyle holds the per-status visual + textual elements for the
+// deploy embed. Adding a new status = one new entry.
+type deployStyle struct {
+	Title    string // emoji + headline shown in embed.Title
+	Color    int    // macaron stripe color
+	IconFile string // PNG basename under https://assets.sumemo.dev/icons/deploy/
+	// IconFile == "" → no footer icon (degrades to text-only footer)
+}
+
+var deployStyles = map[string]deployStyle{
+	"success":     {Title: "🚀 Deployment successful", Color: notifier.ColorSuccess, IconFile: "success.png"},
+	"failure":     {Title: "💔 Deployment failed", Color: notifier.ColorFailure, IconFile: "failure.png"},
+	"in_progress": {Title: "🔄 Deployment in progress", Color: notifier.ColorInProgress, IconFile: ""},
+	"rollback":    {Title: "⏪ Rollback successful", Color: notifier.ColorRollback, IconFile: ""},
+}
+
+// buildDeployEmbed renders a GHA deploy notification as a GitHub-style
+// status card: author block (service name + org avatar + repo link),
+// title (status headline), three inline data fields (Version / Server /
+// Commit), and a footer with the macaron status icon + repo path.
+// embed.Timestamp is set so each viewer sees the absolute time
+// localized to their timezone in the footer's right edge.
 func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
-	emoji := "🌟"
-	color := notifier.ColorSuccess
-	if p.Status != "success" {
-		emoji = "🥀"
-		color = notifier.ColorFailure
+	style, ok := deployStyles[p.Status]
+	if !ok {
+		// unknown status — pick the failure styling so problems aren't
+		// silently rendered as success
+		style = deployStyles["failure"]
+		style.Title = fmt.Sprintf("❓ %s · unknown status %q", p.Service, p.Status)
 	}
 
-	heading := fmt.Sprintf("### %s %s Deploy", emoji, p.Service)
-
-	// On failure, point out which leg burned so the eye doesn't have to
-	// click through to GHA to triage. Slotted right under the heading.
-	failNote := ""
-	if p.Status != "success" {
+	// On failure, append which leg burned to the title (build vs deploy).
+	if p.Status == "failure" {
 		switch {
 		case p.Build != "" && p.Build != "success":
-			failNote = fmt.Sprintf("\n_build %s_", p.Build)
+			style.Title = fmt.Sprintf("💔 Build failed (%s)", p.Build)
 		case p.Deploy != "" && p.Deploy != "success":
-			failNote = fmt.Sprintf("\n_deploy %s_", p.Deploy)
+			style.Title = fmt.Sprintf("💔 Deploy failed (%s)", p.Deploy)
 		}
 	}
 
@@ -205,37 +220,59 @@ func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
 		cluster = "?"
 	}
 
-	// Commit line. <t:UNIX:R> renders as relative localized time for each
-	// viewer ("2 minutes ago"). Skip the commit link if we don't have a
-	// URL — show short SHA as plain text instead.
 	short := p.Commit
 	if len(short) > 7 {
 		short = short[:7]
 	}
-	var commitPart string
+	var commitField string
 	switch {
 	case short != "" && p.CommitURL != "":
-		commitPart = fmt.Sprintf("[%s](%s)", short, p.CommitURL)
+		commitField = fmt.Sprintf("[`%s`](%s)", short, p.CommitURL)
 	case short != "":
-		commitPart = "`" + short + "`"
+		commitField = "`" + short + "`"
 	default:
-		commitPart = "_(no commit)_"
+		commitField = "_(no commit)_"
 	}
-	timePart := fmt.Sprintf("<t:%d:R>", time.Now().Unix())
 
-	desc := fmt.Sprintf(
-		"%s%s\n\n🩷 **Version**\n`%s`\n\n🩷 **Server**\n`%s`\n\n🩷 **Commit**\n%s %s",
-		heading, failNote,
-		version,
-		cluster,
-		commitPart, timePart,
-	)
+	// Author block — service name + org avatar + clickable repo link.
+	// Repo URL fallback to org page if RepoFullName missing.
+	repoURL := "https://github.com/open-xiv"
+	orgIcon := "https://github.com/open-xiv.png"
+	if p.RepoFullName != "" {
+		repoURL = "https://github.com/" + p.RepoFullName
+		if i := strings.IndexByte(p.RepoFullName, '/'); i > 0 {
+			orgIcon = "https://github.com/" + p.RepoFullName[:i] + ".png"
+		}
+	}
 
-	// No embed.Timestamp — the relative <t:UNIX:R> in the body covers it
-	// and the absolute footer time was visual noise.
+	// Footer — text attribution + macaron status icon.
+	footerText := "GitHub Actions"
+	if p.RepoFullName != "" {
+		footerText = "GitHub Actions · " + p.RepoFullName
+	}
+	footerIcon := ""
+	if style.IconFile != "" {
+		footerIcon = notifier.IconBaseURL + "/" + style.IconFile
+	}
+
 	return &discordgo.MessageEmbed{
-		Description: desc,
-		Color:       color,
+		Author: &discordgo.MessageEmbedAuthor{
+			Name:    p.Service,
+			URL:     repoURL,
+			IconURL: orgIcon,
+		},
+		Title: style.Title,
+		Color: style.Color,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "Version", Value: "`" + version + "`", Inline: true},
+			{Name: "Server", Value: "`" + cluster + "`", Inline: true},
+			{Name: "Commit", Value: commitField, Inline: true},
+		},
+		Footer: &discordgo.MessageEmbedFooter{
+			Text:    footerText,
+			IconURL: footerIcon,
+		},
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 }
 

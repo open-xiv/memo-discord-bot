@@ -113,6 +113,7 @@ jobs:
           COMMIT: ${{ github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO_FULL_NAME: ${{ github.repository }}
           TOKEN: ${{ secrets.GHA_WEBHOOK_TOKEN }}
         run: |
           payload=$(jq -nc \
@@ -126,9 +127,11 @@ jobs:
             --arg commit "$COMMIT" \
             --arg commit_url "$COMMIT_URL" \
             --arg run_url "$RUN_URL" \
+            --arg repo_full_name "$REPO_FULL_NAME" \
             '{service:$service, version:$version, tag:$tag, cluster:$cluster,
               status:$status, build:$build, deploy:$deploy,
-              commit:$commit, commit_url:$commit_url, run_url:$run_url}')
+              commit:$commit, commit_url:$commit_url, run_url:$run_url,
+              repo_full_name:$repo_full_name}')
           curl -fsS -X POST https://bot.sumemo.dev/webhook/gha \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
