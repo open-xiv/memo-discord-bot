@@ -101,39 +101,13 @@ jobs:
             echo "status=failure" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Notify bot
-        env:
-          SERVICE: memo-discord-bot
-          CLUSTER: sumemo-us
-          VERSION: ${{ needs.build.outputs.version }}
-          TAG: ${{ needs.build.outputs.tag }}
-          STATUS: ${{ steps.s.outputs.status }}
-          BUILD: ${{ needs.build.result }}
-          DEPLOY: ${{ needs.deploy.result }}
-          COMMIT: ${{ github.sha }}
-          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REPO_FULL_NAME: ${{ github.repository }}
-          TOKEN: ${{ secrets.GHA_WEBHOOK_TOKEN }}
-        run: |
-          payload=$(jq -nc \
-            --arg service "$SERVICE" \
-            --arg version "$VERSION" \
-            --arg tag "$TAG" \
-            --arg cluster "$CLUSTER" \
-            --arg status "$STATUS" \
-            --arg build "$BUILD" \
-            --arg deploy "$DEPLOY" \
-            --arg commit "$COMMIT" \
-            --arg commit_url "$COMMIT_URL" \
-            --arg run_url "$RUN_URL" \
-            --arg repo_full_name "$REPO_FULL_NAME" \
-            '{service:$service, version:$version, tag:$tag, cluster:$cluster,
-              status:$status, build:$build, deploy:$deploy,
-              commit:$commit, commit_url:$commit_url, run_url:$run_url,
-              repo_full_name:$repo_full_name}')
-          curl -fsS -X POST https://bot.sumemo.dev/webhook/gha \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Content-Type: application/json" \
-            -H "X-Webhook-Id: ${{ github.run_id }}-${{ github.run_attempt }}" \
-            -d "$payload" || echo "notify failed (non-fatal)"
+      - uses: open-xiv/gha-actions/notify-deploy@v1
+        with:
+          status: ${{ steps.s.outputs.status }}
+          service: memo-discord-bot
+          kind: deploy
+          version: ${{ needs.build.outputs.version }}
+          cluster: sumemo-us
+          build: ${{ needs.build.result }}
+          deploy: ${{ needs.deploy.result }}
+          webhook_token: ${{ secrets.GHA_WEBHOOK_TOKEN }}

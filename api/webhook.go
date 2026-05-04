@@ -118,6 +118,7 @@ func webhookMiddleware() gin.HandlerFunc {
 
 type ghaPayload struct {
 	Service      string `json:"service"`
+	Kind         string `json:"kind"`    // "deploy" (default) | "release" | "build"
 	Version      string `json:"version"` // git describe → "v7.5.0.0" or "v7.5.0.0+3"
 	Tag          string `json:"tag"`     // image tag, e.g. "sha-9cfe074"
 	Cluster      string `json:"cluster"`
@@ -166,8 +167,10 @@ func handleGHA(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// deployStyle holds the per-status visual + textual elements for the
-// deploy embed. Adding a new status = one new entry.
+// deployStyle holds the per-(kind, status) visual + textual elements
+// for the embed. Color + icon are status-only (the same green check
+// works for "deploy succeeded" and "release succeeded"); only the
+// title text varies by kind.
 type deployStyle struct {
 	Title    string // emoji + headline shown in embed.Title
 	Color    int    // macaron stripe color
@@ -175,11 +178,24 @@ type deployStyle struct {
 	// IconFile == "" → no footer icon (degrades to text-only footer)
 }
 
+// deployStyles is keyed by "kind:status". Lookup falls back to
+// "deploy:status" when kind is unknown so old senders that don't pass
+// `kind` still render correctly.
 var deployStyles = map[string]deployStyle{
-	"success":     {Title: "🚀 Deployment successful", Color: notifier.ColorSuccess, IconFile: "success.png"},
-	"failure":     {Title: "💔 Deployment failed", Color: notifier.ColorFailure, IconFile: "failure.png"},
-	"in_progress": {Title: "🔄 Deployment in progress", Color: notifier.ColorInProgress, IconFile: ""},
-	"rollback":    {Title: "⏪ Rollback successful", Color: notifier.ColorRollback, IconFile: ""},
+	// kind=deploy — k3s rollout, fly deploy, CDN push, CF Pages push
+	"deploy:success":     {Title: "🚀 Deployment successful", Color: notifier.ColorSuccess, IconFile: "success.png"},
+	"deploy:failure":     {Title: "💔 Deployment failed", Color: notifier.ColorFailure, IconFile: "failure.png"},
+	"deploy:in_progress": {Title: "🔄 Deployment in progress", Color: notifier.ColorInProgress, IconFile: ""},
+	"deploy:rollback":    {Title: "⏪ Rollback successful", Color: notifier.ColorRollback, IconFile: ""},
+
+	// kind=release — NuGet publish, Dalamud / ACT plugin release
+	"release:success":     {Title: "📦 Release published", Color: notifier.ColorSuccess, IconFile: "success.png"},
+	"release:failure":     {Title: "💔 Release failed", Color: notifier.ColorFailure, IconFile: "failure.png"},
+	"release:in_progress": {Title: "🔄 Release in progress", Color: notifier.ColorInProgress, IconFile: ""},
+
+	// kind=build — pure CI validation without deploying anywhere
+	"build:success": {Title: "🔨 Build successful", Color: notifier.ColorSuccess, IconFile: "success.png"},
+	"build:failure": {Title: "💔 Build failed", Color: notifier.ColorFailure, IconFile: "failure.png"},
 }
 
 // buildDeployEmbed renders a GHA deploy notification as a GitHub-style
@@ -189,12 +205,21 @@ var deployStyles = map[string]deployStyle{
 // embed.Timestamp is set so each viewer sees the absolute time
 // localized to their timezone in the footer's right edge.
 func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
-	style, ok := deployStyles[p.Status]
+	kind := p.Kind
+	if kind == "" {
+		kind = "deploy" // default for backwards compat with payloads pre-`kind`
+	}
+	style, ok := deployStyles[kind+":"+p.Status]
 	if !ok {
-		// unknown status — pick the failure styling so problems aren't
-		// silently rendered as success
-		style = deployStyles["failure"]
-		style.Title = fmt.Sprintf("❓ %s · unknown status %q", p.Service, p.Status)
+		// fall back to deploy:<status> if kind is unknown
+		if fallback, ok2 := deployStyles["deploy:"+p.Status]; ok2 {
+			style = fallback
+		} else {
+			// unknown status entirely — pick failure styling so problems aren't
+			// silently rendered as success
+			style = deployStyles["deploy:failure"]
+			style.Title = fmt.Sprintf("❓ %s · unknown status %q", p.Service, p.Status)
+		}
 	}
 
 	// On failure, append which leg burned to the title (build vs deploy).
