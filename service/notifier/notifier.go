@@ -11,13 +11,22 @@ import (
 	"github.com/open-xiv/memo-discord-bot/flow"
 )
 
-// Embed colors picked to read well in both Discord light + dark themes.
+// Embed colors — Tailwind v4 macaron palette (the -300 row) so the
+// stripe reads as a pastel signal rather than a saturated alarm.
+// Picked to be readable on Discord's dark theme without screaming.
 const (
-	ColorSuccess = 0x57F287 // green
-	ColorFailure = 0xED4245 // red
-	ColorInfo    = 0x5865F2 // blurple
-	ColorWarn    = 0xFEE75C // yellow
+	ColorSuccess    = 0x86EFAC // green-300  — successful deploy
+	ColorFailure    = 0xFDA4AF // rose-300   — failed deploy / build
+	ColorInProgress = 0xFCD34D // amber-300  — running, not yet final
+	ColorRollback   = 0xC4B5FD // violet-300 — rollback in flight or done
+	ColorInfo       = 0x93C5FD // blue-300   — neutral notice
+	ColorWarn       = 0xFCD34D // amber-300  — alias for warnings
 )
+
+// IconBaseURL hosts the macaron-tinted status PNGs in the assets repo
+// (common/icons/deploy/) → cached on Cloudflare via assets.sumemo.dev.
+// Add new entries when more SVGs land in common/icons/deploy/.
+const IconBaseURL = "https://assets.sumemo.dev/icons/deploy"
 
 // SendEmbed posts a single embed to a channel and returns the resulting
 // message (so caller can edit / reply later if needed).
