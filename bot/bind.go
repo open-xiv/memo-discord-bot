@@ -30,7 +30,6 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	server := strings.TrimSpace(optionMap["server"].StringValue())
 	discordID := i.Member.User.ID
 
-	// 1. find or create user
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).FirstOrCreate(&user, model.User{
 		DiscordID: &discordID,
@@ -42,7 +41,6 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. check binding limit
 	currentCount := flow.DB.Model(&user).Association("Members").Count()
 
 	if currentCount >= MaxBindings {
@@ -51,7 +49,6 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 3. find member
 	var member model.Member
 	err = flow.DB.Where("name = ? AND server = ?", name, server).First(&member).Error
 
@@ -60,7 +57,6 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 4. check bind status
 	var existingCount int64
 	flow.DB.Table("user_members").
 		Where("user_id = ? AND member_id = ?", user.ID, member.ID).
@@ -72,7 +68,6 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 5. create bind
 	err = flow.DB.Model(&user).Association("Members").Append(&member)
 	if err != nil {
 		log.Error().Err(err).Msgf("user bind failed (db) [%s@%s]", name, server)
@@ -88,7 +83,6 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 func handleUnbind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Preload("Members").Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil || len(user.Members) == 0 {
@@ -96,7 +90,6 @@ func handleUnbind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. build select menu options
 	options := make([]discordgo.SelectMenuOption, len(user.Members))
 	for idx, member := range user.Members {
 		options[idx] = discordgo.SelectMenuOption{
@@ -133,7 +126,6 @@ func handleUnbind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 func handleList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Preload("Members").Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil || len(user.Members) == 0 {
@@ -141,7 +133,6 @@ func handleList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. build embed fields
 	fields := make([]*discordgo.MessageEmbedField, 0, len(user.Members))
 	for idx, member := range user.Members {
 		hiddenStatus := ""
@@ -178,7 +169,6 @@ func handleList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 func handleHidden(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Preload("Members").Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil || len(user.Members) == 0 {
@@ -186,7 +176,6 @@ func handleHidden(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. build select menu options
 	options := make([]discordgo.SelectMenuOption, len(user.Members))
 	for idx, member := range user.Members {
 		hiddenStatus := "显示"

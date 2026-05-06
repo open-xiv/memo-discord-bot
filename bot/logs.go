@@ -29,7 +29,6 @@ func validateKey(clientID, clientSecret string) error {
 func handleLogs(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil {
@@ -37,12 +36,10 @@ func handleLogs(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. check if credentials already exist
 	var existingKey model.LogsKey
 	err = flow.DB.Where("user_id = ?", user.ID).First(&existingKey).Error
 
 	if err == nil {
-		// exist -> update?
 		err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -151,7 +148,6 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil {
@@ -159,7 +155,6 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. validate credentials
 	var existingKey model.LogsKey
 	err = flow.DB.Where("client = ? AND user_id != ?", clientID, user.ID).First(&existingKey).Error
 	if err == nil {
@@ -167,14 +162,12 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 3. validate credentials by calling FFLogs API
 	err = validateKey(clientID, clientSecret)
 	if err != nil {
 		respondError(s, i, "无效的 FFLogs API 凭据")
 		return
 	}
 
-	// 4. save credentials (create or update)
 	logsKey := model.LogsKey{
 		UserID: user.ID,
 		Client: clientID,
@@ -190,7 +183,6 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	log.Info().Msgf("logs key bind success [%s -> %s]", discordID, maskClientID(clientID))
 
-	// 5. assign role
 	err = AddRoleToUser(discordID, RoleLogsBindID)
 	if err != nil {
 		log.Error().Err(err).Msg("logs key bind failed (role)")

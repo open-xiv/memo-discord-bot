@@ -15,7 +15,6 @@ var CommandHandlers = map[string]func(s *discordgo.Session, i *discordgo.Interac
 func Start() {
 	s := flow.Discord
 
-	// handlers
 	RegisterBindHandlers()
 	RegisterLogsHandlers()
 	RegisterSyncHandlers()
@@ -26,32 +25,26 @@ func Start() {
 	warmInteractionLabels()
 	warmSessionEventLabels()
 
-	// component handlers
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		switch i.Type {
 		case discordgo.InteractionApplicationCommand:
-			// slash
 			name := i.ApplicationCommandData().Name
 			metrics.InteractionsTotal.WithLabelValues("app_command", name).Inc()
 			if h, ok := CommandHandlers[name]; ok {
 				h(s, i)
 			}
 		case discordgo.InteractionMessageComponent:
-			// components
 			metrics.InteractionsTotal.WithLabelValues("component", "").Inc()
 			handleComponentInteraction(s, i)
 		case discordgo.InteractionModalSubmit:
-			// modal
 			metrics.InteractionsTotal.WithLabelValues("modal", "").Inc()
 			handleModalSubmit(s, i)
 		case discordgo.InteractionApplicationCommandAutocomplete:
-			// autocomplete
 			metrics.InteractionsTotal.WithLabelValues("autocomplete", i.ApplicationCommandData().Name).Inc()
 			handleAutocomplete(s, i)
 		}
 	})
 
-	// register ready handler
 	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		metrics.SessionEvents.WithLabelValues("ready").Inc()
 		log.Info().Msgf("discord bot session start (%s)", r.User.String())
@@ -70,13 +63,11 @@ func Start() {
 		log.Warn().Str("url", e.URL).Msg("discord rate limit hit")
 	})
 
-	// connect to Discord
 	err := s.Open()
 	if err != nil {
 		log.Fatal().Err(err).Msg("discord bot connect failed")
 	}
 
-	// slash commands
 	removeGlobalCommands(s)
 	registerCommands(s)
 }
@@ -149,7 +140,6 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	memberID := data.Values[0]
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil {
@@ -157,7 +147,6 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. find member
 	var member model.Member
 	err = flow.DB.First(&member, memberID).Error
 	if err != nil {
@@ -165,7 +154,6 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 3. unbind member
 	err = flow.DB.Model(&user).Association("Members").Delete(&member)
 	if err != nil {
 		log.Error().Err(err).Msgf("user unbind failed [%s@%s]", member.Name, member.Server)
@@ -173,7 +161,6 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 4. respond
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
@@ -198,7 +185,6 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	memberID := data.Values[0]
 	discordID := i.Member.User.ID
 
-	// 1. find user
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil {
@@ -206,7 +192,6 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 2. find member
 	var member model.Member
 	err = flow.DB.First(&member, memberID).Error
 	if err != nil {
@@ -214,7 +199,6 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 3. verify user owns this member
 	var existingCount int64
 	flow.DB.Table("user_members").
 		Where("user_id = ? AND member_id = ?", user.ID, member.ID).
@@ -225,7 +209,6 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 4. toggle hidden status
 	newHiddenStatus := !member.Hidden
 	err = flow.DB.Model(&member).Update("hidden", newHiddenStatus).Error
 	if err != nil {
@@ -234,7 +217,6 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	// 5. respond
 	statusText := "显示"
 	if newHiddenStatus {
 		statusText = "隐藏"

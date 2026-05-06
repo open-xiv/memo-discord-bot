@@ -23,7 +23,6 @@ var servers = []string{
 func handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 
-	// 1. fetch focused option
 	var focusedOption *discordgo.ApplicationCommandInteractionDataOption
 	for _, opt := range data.Options {
 		if opt.Focused {
@@ -38,11 +37,9 @@ func handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	var choices []*discordgo.ApplicationCommandOptionChoice
 
-	// 2. generate choices based on focused option
 	switch focusedOption.Name {
 
 	case "name":
-		// name from db
 		query := focusedOption.StringValue()
 		if query == "" {
 			break
@@ -68,7 +65,6 @@ func handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		}
 
 	case "server":
-		// server from predefined list
 		query := strings.ToLower(focusedOption.StringValue())
 
 		for _, server := range servers {
