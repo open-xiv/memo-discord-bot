@@ -11,7 +11,6 @@ type Member struct {
 	Name   string `gorm:"uniqueIndex:idx_member_name_server" json:"name"`
 	Server string `gorm:"uniqueIndex:idx_member_name_server" json:"server"`
 
-	// expanded fields
 	Hidden       bool           `gorm:"default:false" json:"hidden"`
 	Tags         pq.StringArray `gorm:"type:text[];index:,type:gin" json:"tags"`
 	LogsSyncTime *time.Time     `json:"logs_sync_time"`

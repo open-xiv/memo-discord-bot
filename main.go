@@ -17,19 +17,15 @@ import (
 )
 
 func main() {
-	// logger
 	logger.InitLogger()
 
-	// database
 	flow.InitDB()
 	flow.InitRedis()
 
-	// discord bot
 	flow.InitDiscord()
 	bot.Start()
 	defer bot.Stop()
 
-	// restful
 	go func() {
 		r := gin.New()
 		r.Use(gin.Recovery())
@@ -46,7 +42,6 @@ func main() {
 		r.GET("/status", api.Status)
 		r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-		// inbound webhooks: /webhook/gha, /webhook/github
 		api.RegisterWebhooks(r)
 
 		if err := r.Run(":8080"); err != nil {
@@ -54,7 +49,6 @@ func main() {
 		}
 	}()
 
-	// wait for termination signal
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc

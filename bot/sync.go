@@ -23,21 +23,18 @@ func RegisterSyncHandlers() {
 
 // Discord → Database
 func handleGuildMemberUpdate(s *discordgo.Session, m *discordgo.GuildMemberUpdate) {
-	// 1. filter by Guild ID
 	if m.GuildID != GuildID {
 		return
 	}
 
 	discordID := m.User.ID
 
-	// 2. find user
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
 	if err != nil {
 		return
 	}
 
-	// 3. filter roles
 	var roleIDs []string
 	for _, roleID := range m.Member.Roles {
 		role := getRole(s, GuildID, roleID)
@@ -46,7 +43,6 @@ func handleGuildMemberUpdate(s *discordgo.Session, m *discordgo.GuildMemberUpdat
 		}
 	}
 
-	// 4. update database
 	err = flow.DB.Model(&user).Update("role_ids", pq.StringArray(roleIDs)).Error
 	if err != nil {
 		log.Error().Err(err).Msgf("role sync failed [%s -> %s]", discordID, roleIDs)
