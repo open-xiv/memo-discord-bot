@@ -45,11 +45,11 @@ func handleGuildMemberUpdate(s *discordgo.Session, m *discordgo.GuildMemberUpdat
 
 	err = flow.DB.Model(&user).Update("role_ids", pq.StringArray(roleIDs)).Error
 	if err != nil {
-		log.Error().Err(err).Msgf("role sync failed [%s -> %s]", discordID, roleIDs)
+		log.Error().Err(err).Str("discord_id", discordID).Strs("role_ids", roleIDs).Msg("role sync failed")
 		return
 	}
 
-	log.Info().Msgf("role sync success [%s -> %s]", discordID, roleIDs)
+	log.Info().Str("discord_id", discordID).Strs("role_ids", roleIDs).Msg("role sync success")
 }
 
 func getRole(s *discordgo.Session, guildID, roleID string) *discordgo.Role {

@@ -181,7 +181,7 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	log.Info().Msgf("logs key bind success [%s -> %s]", discordID, maskClientID(clientID))
+	log.Info().Str("discord_id", discordID).Str("client_id_masked", maskClientID(clientID)).Msg("logs key bind success")
 
 	err = AddRoleToUser(discordID, RoleLogsBindID)
 	if err != nil {
