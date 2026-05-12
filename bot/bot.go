@@ -47,7 +47,7 @@ func Start() {
 
 	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		metrics.SessionEvents.WithLabelValues("ready").Inc()
-		log.Info().Msgf("discord bot session start (%s)", r.User.String())
+		log.Info().Str("user", r.User.String()).Msg("discord bot session started")
 	})
 
 	// gateway resilience signals — useful when the bot stops responding,
@@ -99,9 +99,9 @@ func removeGlobalCommands(s *discordgo.Session) {
 	for _, cmd := range commands {
 		err := s.ApplicationCommandDelete(s.State.User.ID, "", cmd.ID)
 		if err != nil {
-			log.Error().Err(err).Msgf("global command delete failed (%s)", cmd.Name)
+			log.Error().Err(err).Str("command", cmd.Name).Msg("global command delete failed")
 		} else {
-			log.Info().Msgf("global command deleted (%s)", cmd.Name)
+			log.Info().Str("command", cmd.Name).Msg("global command deleted")
 		}
 	}
 }
@@ -110,9 +110,9 @@ func registerCommands(s *discordgo.Session) {
 	for _, cmd := range Commands {
 		_, err := s.ApplicationCommandCreate(s.State.User.ID, GuildID, cmd)
 		if err != nil {
-			log.Error().Err(err).Msgf("discord bot command registration failed (%s)", cmd.Name)
+			log.Error().Err(err).Str("command", cmd.Name).Msg("discord bot command registration failed")
 		} else {
-			log.Info().Err(err).Msgf("discord bot command register (%s)", cmd.Name)
+			log.Info().Str("command", cmd.Name).Msg("discord bot command registered")
 		}
 	}
 }
@@ -156,7 +156,7 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	err = flow.DB.Model(&user).Association("Members").Delete(&member)
 	if err != nil {
-		log.Error().Err(err).Msgf("user unbind failed [%s@%s]", member.Name, member.Server)
+		log.Error().Err(err).Str("name", member.Name).Str("server", member.Server).Msg("user unbind failed")
 		respondError(s, i, "无法解绑角色 内部错误")
 		return
 	}
@@ -172,7 +172,7 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	log.Info().Msgf("user unbind success [%s -> %s@%s]", discordID, member.Name, member.Server)
+	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Msg("user unbind success")
 }
 
 func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -212,7 +212,7 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	newHiddenStatus := !member.Hidden
 	err = flow.DB.Model(&member).Update("hidden", newHiddenStatus).Error
 	if err != nil {
-		log.Error().Err(err).Msgf("toggle hidden status failed [%s@%s]", member.Name, member.Server)
+		log.Error().Err(err).Str("name", member.Name).Str("server", member.Server).Msg("toggle hidden status failed")
 		respondError(s, i, "无法修改隐藏状态 内部错误")
 		return
 	}
@@ -233,7 +233,7 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	log.Info().Msgf("toggle hidden status success [%s -> %s@%s: %v]", discordID, member.Name, member.Server, newHiddenStatus)
+	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Bool("hidden", newHiddenStatus).Msg("toggle hidden status success")
 }
 
 func handleModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate) {

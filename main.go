@@ -12,6 +12,7 @@ import (
 	"github.com/open-xiv/memo-discord-bot/flow"
 	"github.com/open-xiv/memo-discord-bot/logger"
 	"github.com/open-xiv/memo-discord-bot/metrics"
+	"github.com/open-xiv/memo-discord-bot/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 )
@@ -29,6 +30,7 @@ func main() {
 	go func() {
 		r := gin.New()
 		r.Use(gin.Recovery())
+		r.Use(middleware.Logger())
 
 		// HTTP request counter — labels (path, method, code).
 		r.Use(func(c *gin.Context) {
@@ -38,8 +40,9 @@ func main() {
 			).Inc()
 		})
 
-		r.GET("/", api.Status)
 		r.GET("/status", api.Status)
+		r.GET("/status/live", api.StatusLive)
+		r.GET("/status/ready", api.StatusReady)
 		r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 		api.RegisterWebhooks(r)

@@ -52,7 +52,7 @@ func handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			Find(&members).Error
 
 		if err != nil {
-			log.Error().Err(err).Msgf("autocomplete query [%s] failed (%s)", query, focusedOption.Name)
+			log.Error().Err(err).Str("query", query).Str("field", focusedOption.Name).Msg("autocomplete query failed")
 			return
 		}
 
