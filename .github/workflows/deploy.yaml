@@ -33,6 +33,7 @@ jobs:
         id: meta
         run: |
           echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "build=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           # Prefer git describe; fall back to short SHA if no tag yet.
           # Normalize "v7.5.0.0-3-g9cfe074" → "v7.5.0.0+3" for nicer
           # display; exact-tag commits stay as "v7.5.0.0".
@@ -61,6 +62,8 @@ jobs:
             ${{ env.IMAGE }}:latest
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
+            MEMO_VERSION=${{ steps.meta.outputs.version }}
+            MEMO_BUILD=${{ steps.meta.outputs.build }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
