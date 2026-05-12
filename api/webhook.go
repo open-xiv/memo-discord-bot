@@ -162,8 +162,8 @@ func handleGHA(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "send failed"})
 		return
 	}
-	log.Info().Str("service", p.Service).Str("version", p.Version).
-		Str("status", p.Status).Msg("gha webhook posted")
+	log.Info().Str("deploy_service", p.Service).Str("deploy_version", p.Version).
+		Str("deploy_status", p.Status).Msg("gha webhook posted")
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 

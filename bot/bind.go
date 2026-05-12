@@ -70,12 +70,12 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	err = flow.DB.Model(&user).Association("Members").Append(&member)
 	if err != nil {
-		log.Error().Err(err).Msgf("user bind failed (db) [%s@%s]", name, server)
+		log.Error().Err(err).Str("name", name).Str("server", server).Msg("user bind failed (db)")
 		respondError(s, i, "无法绑定角色 内部错误")
 		return
 	}
 
-	log.Info().Msgf("user bind success [%s -> %s@%s]", discordID, name, server)
+	log.Info().Str("discord_id", discordID).Str("name", name).Str("server", server).Msg("user bind success")
 	msg := fmt.Sprintf("成功绑定了 %s@%s (%d / %d)", name, server, currentCount+1, MaxBindings)
 	respondSuccess(s, i, msg)
 }

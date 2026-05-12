@@ -8,9 +8,9 @@ import (
 func AddRoleToUser(userID, roleID string) error {
 	err := flow.Discord.GuildMemberRoleAdd(GuildID, userID, roleID)
 	if err != nil {
-		log.Error().Err(err).Msgf("role bind failed [%s -> %s]", userID, roleID)
+		log.Error().Err(err).Str("discord_id", userID).Str("role_id", roleID).Msg("role bind failed")
 		return err
 	}
-	log.Info().Msgf("role bind success [%s -> %s]", userID, roleID)
+	log.Info().Str("discord_id", userID).Str("role_id", roleID).Msg("role bind success")
 	return nil
 }
