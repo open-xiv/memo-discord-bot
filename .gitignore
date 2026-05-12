@@ -4,6 +4,11 @@ build/
 # Secrets
 config/secrets.yaml
 
+# Local env (real values; .env.example is committed)
+.env
+.env.local
+.env.*.local
+
 # Database
 sql/
 
