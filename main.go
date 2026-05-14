@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"strconv"
@@ -26,6 +27,13 @@ func main() {
 	flow.InitDiscord()
 	bot.Start()
 	defer bot.Stop()
+
+	// background goroutine — refresh /status dep checks (database, redis,
+	// discord-gateway). readiness probes read the cached snapshot, never
+	// pinging inline. ctx is cancelled on SIGINT/SIGTERM below.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	api.StartHealthRefresher(ctx)
 
 	go func() {
 		r := gin.New()
