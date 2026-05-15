@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"os"
 	"time"
 
@@ -35,10 +36,24 @@ func InitDB() {
 
 	sqlDB.SetMaxOpenConns(15)
 	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	// short-ish lifetime so half-open conns through the WG tunnel cycle
+	// out instead of getting stuck for an hour. ~5 min is a sweet spot
+	// between pool churn cost and stale-conn risk for our query rate.
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(2 * time.Minute)
 
-	err = DB.AutoMigrate(&model.Member{}, &model.User{}, &model.LogsKey{})
-	if err != nil {
+	// explicit ping — gorm.Open is lazy and AutoMigrate has been observed
+	// to no-op (cached schema) without ever opening a real connection.
+	// without this, the bot could start up "successfully" with an
+	// unreachable DB and only surface the failure via readiness probes,
+	// which never trigger a restart.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(ctx); err != nil {
+		log.Fatal().Err(err).Msg("database ping failed at startup")
+	}
+
+	if err := DB.AutoMigrate(&model.Member{}, &model.User{}, &model.LogsKey{}); err != nil {
 		log.Fatal().Err(err).Msg("failed to auto migrate database")
 	}
 }
