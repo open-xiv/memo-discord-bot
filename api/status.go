@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 
 	"github.com/open-xiv/memo-discord-bot/buildinfo"
 	"github.com/open-xiv/memo-discord-bot/flow"
@@ -45,6 +46,15 @@ const (
 	// ack is older than this. Discord's heartbeat interval is ~41s, so 60s
 	// allows one missed ack before we report unhealthy.
 	discordGatewayStaleAfter = 60 * time.Second
+	// criticalDepFailFastAfter triggers process exit when *every* critical
+	// dep (DB + redis) has been failing every refresh tick for this long.
+	// design intent: liveness probe cannot detect half-open conn pools
+	// (process answers HTTP fine, but every query times out), so the
+	// refresher itself acts as the kill switch — process exits non-zero,
+	// kubelet's restartPolicy=Always recycles the pod, fresh pool gets a
+	// clean network path. discord-gateway is excluded from the trigger
+	// because websocket reconnects independently and false-positives here.
+	criticalDepFailFastAfter = 90 * time.Second
 )
 
 type healthSnapshot struct {
@@ -52,7 +62,13 @@ type healthSnapshot struct {
 	asOf   time.Time
 }
 
-var cachedHealth atomic.Pointer[healthSnapshot]
+var (
+	cachedHealth atomic.Pointer[healthSnapshot]
+	// firstCriticalFailure is the wall-clock time of the earliest tick in the
+	// current run of consecutive "all critical deps down" results. nil whenever
+	// any critical dep is healthy. drives the criticalDepFailFastAfter trigger.
+	firstCriticalFailure atomic.Pointer[time.Time]
+)
 
 // StartHealthRefresher launches the background goroutine that refreshes the
 // dep-check snapshot every healthRefreshInterval. callers should invoke this
@@ -81,10 +97,39 @@ func StartHealthRefresher(ctx context.Context) {
 func refreshHealth(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, healthProbeTimeout)
 	defer cancel()
+	checks := runChecks(ctx)
 	cachedHealth.Store(&healthSnapshot{
-		checks: runChecks(ctx),
+		checks: checks,
 		asOf:   time.Now().UTC(),
 	})
+	trackCriticalDepStreak(checks)
+}
+
+// trackCriticalDepStreak fails the process out when every critical dep has
+// been failing on every refresh tick for criticalDepFailFastAfter. discord-
+// gateway is intentionally excluded.
+//
+// rationale: a half-open WG / TLS conn pool can leave the process answering
+// HTTP (so liveness stays green) while every query times out (so readiness
+// stays red). nothing in k8s's two-probe model triggers a restart for that
+// shape; we have to do it ourselves.
+func trackCriticalDepStreak(checks map[string]Check) {
+	criticalAllDown := !checks["database"].OK && !checks["redis"].OK
+	if !criticalAllDown {
+		firstCriticalFailure.Store(nil)
+		return
+	}
+	if firstCriticalFailure.Load() == nil {
+		now := time.Now()
+		firstCriticalFailure.Store(&now)
+		return
+	}
+	first := *firstCriticalFailure.Load()
+	if time.Since(first) >= criticalDepFailFastAfter {
+		log.Fatal().
+			Dur("down_for", time.Since(first)).
+			Msg("critical deps (database+redis) failing every refresh tick — exiting so kubelet can recycle")
+	}
 }
 
 // Status is the human/monitor-facing endpoint; reads the cached snapshot.
