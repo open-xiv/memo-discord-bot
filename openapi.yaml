@@ -1,0 +1,388 @@
+openapi: 3.1.0
+info:
+  title: memo-discord-bot API
+  description: |
+    HTTP surface of the Discord bot for memo: health probes, Prometheus metrics, and
+    inbound webhook receivers (GitHub Actions deploy notifier + GitHub repo events).
+
+    The bot runs as a single-replica k3s pod on droplet-us (`memo` namespace) with no
+    public ingress; the Service is ClusterIP-only. Webhook traffic reaches it via
+    dedicated edge routing (e.g. cloudflared / reverse proxy on the same node);
+    everything else is intra-cluster (kubelet probes, Prometheus scrape, in-mesh callers).
+  version: 1.0.0
+
+servers:
+  - url: http://memo-discord-bot.memo.svc.cluster.local:8080
+    description: In-cluster ClusterIP (k3s droplet-us, `memo` namespace)
+
+tags:
+  - name: status
+  - name: webhooks
+
+paths:
+  # ── Status ──
+  /status:
+    get:
+      tags: [status]
+      summary: Health snapshot
+      description: |
+        Human / Grafana / cross-service consumption. Reads a cached snapshot refreshed
+        every 15s by a background goroutine; the timestamp is exposed via `as_of`.
+        Returns 503 with the same body shape when any check is failing. Critical deps
+        are `database`, `redis`, `discord-gateway`.
+      operationId: getStatus
+      responses:
+        "200":
+          description: All checks pass
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthSnapshot"
+        "503":
+          description: One or more checks failing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthSnapshot"
+
+  /status/live:
+    get:
+      tags: [status]
+      summary: Kubelet liveness probe
+      description: |
+        Returns 200 with `{"status":"ok"}` iff the process can answer HTTP. No dependency
+        checks — a failure here restarts the pod, so transient dep outages must not propagate.
+      operationId: getStatusLive
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /status/ready:
+    get:
+      tags: [status]
+      summary: Kubelet readiness probe
+      description: |
+        Returns 200 iff all critical dep checks in the cached snapshot pass. Reads only
+        the cached snapshot so it returns immediately regardless of dep RTT. Fails closed
+        (503) if the snapshot is older than 30s or any critical check is failing.
+      operationId: getStatusReady
+      responses:
+        "200":
+          description: All critical deps healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "503":
+          description: Snapshot stale, missing, or a critical check is failing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                  reason:
+                    type: string
+
+  /metrics:
+    get:
+      tags: [status]
+      summary: Prometheus metrics
+      description: Exposition-format metrics for the Prometheus scraper. No auth — ClusterIP-only.
+      operationId: getMetrics
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ── Webhooks ──
+  /webhook/gha:
+    post:
+      tags: [webhooks]
+      summary: GitHub Actions deploy notifier
+      description: |
+        Our own deploy / release / build notifier called by GHA `notify` jobs. Renders a
+        Discord embed in the dev channel.
+
+        Auth: `Authorization: Bearer <GHA_WEBHOOK_TOKEN>` (constant-time compare).
+
+        Deduplication: shared middleware keys on `X-Webhook-Id` against Redis (24h TTL);
+        duplicates return `200 {"status":"duplicate"}` without posting to Discord.
+        Body capped at 1 MiB.
+      operationId: webhookGHA
+      security:
+        - ghaBearer: []
+      parameters:
+        - $ref: "#/components/parameters/WebhookIDHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GHADeployPayload"
+      responses:
+        "200":
+          description: Posted to Discord, or recognised as a duplicate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookStatus"
+        "400":
+          description: Malformed JSON or unreadable body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Bearer token missing or mismatched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server misconfigured (token env var unset)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Discord API rejected the embed send
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /webhook/github:
+    post:
+      tags: [webhooks]
+      summary: GitHub repo events (release / workflow_run / ping)
+      description: |
+        GitHub-delivered webhooks for `open-xiv` repos. Only `release` (action=published)
+        and failing `workflow_run` events render a Discord embed; everything else is
+        counted as `ignored` and returns 200 silently. Successful workflows are skipped
+        here because /webhook/gha already covers them with richer context.
+
+        Auth: HMAC-SHA256 of the raw body using `GITHUB_WEBHOOK_SECRET`, sent as
+        `X-Hub-Signature-256: sha256=<hex>`.
+
+        Deduplication: shared middleware keys on `X-GitHub-Delivery` (24h TTL).
+        Body capped at 1 MiB. The `ping` event is always answered with `{"status":"pong"}`.
+      operationId: webhookGitHub
+      security:
+        - githubHMAC: []
+      parameters:
+        - $ref: "#/components/parameters/GitHubDeliveryHeader"
+        - $ref: "#/components/parameters/GitHubEventHeader"
+      requestBody:
+        required: true
+        description: Raw GitHub webhook payload; shape varies by `X-GitHub-Event`.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: |
+            Posted, ignored, duplicate, or `pong` for the ping event. `status` is one of
+            `ok` / `ignored` / `duplicate` / `pong`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookStatus"
+        "400":
+          description: Unreadable body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Signature header missing or HMAC mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server misconfigured (secret env var unset)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Discord API rejected the embed send
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    ghaBearer:
+      type: http
+      scheme: bearer
+      description: |
+        Shared secret for our own GHA notifier; sent as `Authorization: Bearer <token>`
+        and constant-time compared against `GHA_WEBHOOK_TOKEN`.
+    githubHMAC:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: |
+        GitHub-issued HMAC-SHA256 of the raw request body, `sha256=<hex>`. Verified with
+        `GITHUB_WEBHOOK_SECRET`.
+
+  parameters:
+    WebhookIDHeader:
+      name: X-Webhook-Id
+      in: header
+      required: false
+      description: |
+        Stable delivery ID minted by the GHA notifier; drives Redis dedup (24h TTL).
+        Omitting it disables dedup for that call.
+      schema:
+        type: string
+    GitHubDeliveryHeader:
+      name: X-GitHub-Delivery
+      in: header
+      required: true
+      description: GitHub's per-delivery UUID; used as the dedup key.
+      schema:
+        type: string
+    GitHubEventHeader:
+      name: X-GitHub-Event
+      in: header
+      required: true
+      description: GitHub event name (`release`, `workflow_run`, `ping`, …).
+      schema:
+        type: string
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    StatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+
+    HealthCheck:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        latency_ms:
+          type: integer
+          format: int64
+        error:
+          type: string
+
+    HealthSnapshot:
+      type: object
+      required: [service, version, build, env, started_at, uptime_seconds, status, checks, as_of]
+      properties:
+        service:
+          type: string
+        version:
+          type: string
+        build:
+          type: string
+        env:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        uptime_seconds:
+          type: integer
+          format: int64
+        status:
+          type: string
+          description: "`ok` (all checks pass) / `down` (a critical check failed; HTTP also returns 503)"
+        checks:
+          type: object
+          description: |
+            Keyed by dep name. For this service: `database`, `redis`, `discord-gateway`.
+            The gateway check is a local field read (LastHeartbeatAck recency), not a
+            network call.
+          additionalProperties:
+            $ref: "#/components/schemas/HealthCheck"
+        as_of:
+          type: string
+          format: date-time
+          description: When the cached snapshot was last refreshed.
+
+    WebhookStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: |
+            `ok` (rendered + posted), `ignored` (event not rendered by this bot),
+            `duplicate` (delivery ID already seen within 24h), or `pong` (GitHub ping).
+        event:
+          type: string
+          description: Echoed `X-GitHub-Event` when the response is `ignored`.
+
+    GHADeployPayload:
+      type: object
+      description: |
+        Body posted by our GHA `notify` job. Fields mirror `ghaPayload` in
+        `api/webhook.go`; missing fields render as `?` / `(unknown)` rather than
+        rejecting the request.
+      properties:
+        service:
+          type: string
+          description: Service name shown in the embed author block.
+        kind:
+          type: string
+          description: "`deploy` (default) / `release` / `build`. Drives embed title + icon."
+          enum: [deploy, release, build]
+        version:
+          type: string
+          description: "`git describe` output, e.g. `v7.5.0.0` or `v7.5.0.0+3`."
+        tag:
+          type: string
+          description: Image tag (e.g. `sha-9cfe074`); falls back into the Version field when version is empty.
+        cluster:
+          type: string
+          description: Target cluster / environment label.
+        status:
+          type: string
+          description: Overall outcome; controls embed color + icon.
+          enum: [success, failure, in_progress, rollback]
+        build:
+          type: string
+          description: Result of the build job (success / failure / cancelled / skipped). Used to annotate failure titles.
+        deploy:
+          type: string
+          description: Result of the deploy job; used to annotate failure titles.
+        commit:
+          type: string
+          description: Full SHA; trimmed to 7 chars for display.
+        commit_url:
+          type: string
+          format: uri
+        run_url:
+          type: string
+          format: uri
+        repo_full_name:
+          type: string
+          description: "`owner/repo`, e.g. `open-xiv/memo-discord-bot`. Used for the author link + footer attribution."
+
+security: []
