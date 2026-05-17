@@ -1,8 +1,8 @@
-# memo-discord-bot
+## memo-discord-bot
 
 SuMemo 社区 Discord 机器人：斜杠命令做角色绑定 / 同步 / 查询，附带一个 HTTP 端供探针、指标与 webhook 接收。
 
-## Run
+### Run
 
 ```bash
 cp .env.example .env        # 至少 DISCORD_BOT_TOKEN / DATABASE_URL / REDIS_URL
@@ -10,7 +10,7 @@ go run .
 docker compose up -d        # 起本地 pg / redis
 ```
 
-## Config
+### Config
 
 | env | required | what it tunes |
 |---|---|---|
@@ -23,7 +23,7 @@ docker compose up -d        # 起本地 pg / redis
 
 完整 env 见 [`.env.example`](.env.example)。
 
-## 斜杠命令
+### 斜杠命令
 
 | cmd | 作用 |
 |---|---|
@@ -33,7 +33,7 @@ docker compose up -d        # 起本地 pg / redis
 | `/logs` | 触发 FFLogs 同步 |
 | `/hidden` | 修改角色隐藏状态 |
 
-## Endpoints
+### Endpoints
 
 | route | response | semantics |
 |---|---|---|
