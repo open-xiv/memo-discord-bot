@@ -95,14 +95,30 @@ func StartHealthRefresher(ctx context.Context) {
 }
 
 func refreshHealth(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, healthProbeTimeout)
-	defer cancel()
-	checks := runChecks(ctx)
+	checks := runChecks(parent)
 	cachedHealth.Store(&healthSnapshot{
 		checks: checks,
 		asOf:   time.Now().UTC(),
 	})
+	logFailedChecks(checks)
 	trackCriticalDepStreak(checks)
+}
+
+// logFailedChecks emits a warn per failed dependency so flaps show up in
+// the log stream instead of staying buried inside the /status JSON payload.
+// before this existed the only signal of a dep outage was the eventual fatal
+// from trackCriticalDepStreak, which gave no clue which dep had failed.
+func logFailedChecks(checks map[string]Check) {
+	for name, ch := range checks {
+		if ch.OK {
+			continue
+		}
+		log.Warn().
+			Str("event", "health.dep_failed").
+			Str("dep", name).
+			Str("error", ch.Error).
+			Msg("dependency check failed")
+	}
 }
 
 // trackCriticalDepStreak fails the process out when every critical dep has
@@ -127,7 +143,10 @@ func trackCriticalDepStreak(checks map[string]Check) {
 	first := *firstCriticalFailure.Load()
 	if time.Since(first) >= criticalDepFailFastAfter {
 		log.Fatal().
+			Str("event", "health.critical_failover").
 			Dur("down_for", time.Since(first)).
+			Str("db_error", checks["database"].Error).
+			Str("redis_error", checks["redis"].Error).
 			Msg("critical deps (database+redis) failing every refresh tick — exiting so kubelet can recycle")
 	}
 }
@@ -198,12 +217,35 @@ func StatusReady(c *gin.Context) {
 // runChecks returns the per-dependency check map for memo-discord-bot.
 // the standard at memo-docs/standards/observability.md lists database, redis,
 // and discord-gateway as critical-for-ready for this service.
-func runChecks(ctx context.Context) map[string]Check {
-	return map[string]Check{
-		"database":        dbCheck(ctx),
-		"redis":           redisCheck(ctx),
-		"discord-gateway": discordGatewayCheck(),
+//
+// each dep gets its own context.WithTimeout and runs in its own goroutine —
+// a previous version shared a single 5s budget across all three sequential
+// checks, so a slow DB cold-handshake over WG (~400ms steady, occasionally
+// seconds during a flap) would starve the redis check and surface as a
+// false dual-failure that then tripped criticalDepFailFastAfter.
+func runChecks(parent context.Context) map[string]Check {
+	type result struct {
+		name  string
+		check Check
 	}
+	out := make(chan result, 3)
+
+	runWithCtx := func(name string, fn func(context.Context) Check) {
+		ctx, cancel := context.WithTimeout(parent, healthProbeTimeout)
+		defer cancel()
+		out <- result{name, fn(ctx)}
+	}
+
+	go runWithCtx("database", dbCheck)
+	go runWithCtx("redis", redisCheck)
+	go func() { out <- result{"discord-gateway", discordGatewayCheck()} }()
+
+	checks := make(map[string]Check, 3)
+	for i := 0; i < 3; i++ {
+		r := <-out
+		checks[r.name] = r.check
+	}
+	return checks
 }
 
 func dbCheck(ctx context.Context) Check {
