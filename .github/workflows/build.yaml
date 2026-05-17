@@ -110,7 +110,6 @@ jobs:
           service: memo-discord-bot
           kind: build
           version: ${{ needs.build.outputs.version }}
-          cluster: ''
           build: ${{ needs.build.result }}
           webhook_url: ${{ secrets.BOT_WEBHOOK_URL }}
           webhook_token: ${{ secrets.BOT_WEBHOOK_TOKEN }}
