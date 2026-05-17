@@ -4,16 +4,11 @@ info:
   description: |
     HTTP surface of the Discord bot for memo: health probes, Prometheus metrics, and
     inbound webhook receivers (GitHub Actions deploy notifier + GitHub repo events).
-
-    The bot runs as a single-replica k3s pod on droplet-us (`memo` namespace) with no
-    public ingress; the Service is ClusterIP-only. Webhook traffic reaches it via
-    dedicated edge routing (e.g. cloudflared / reverse proxy on the same node);
-    everything else is intra-cluster (kubelet probes, Prometheus scrape, in-mesh callers).
   version: 1.0.0
 
 servers:
-  - url: http://memo-discord-bot.memo.svc.cluster.local:8080
-    description: In-cluster ClusterIP (k3s droplet-us, `memo` namespace)
+  - url: http://localhost:8080
+    description: Local development
 
 tags:
   - name: status
@@ -48,7 +43,7 @@ paths:
   /status/live:
     get:
       tags: [status]
-      summary: Kubelet liveness probe
+      summary: Liveness probe
       description: |
         Returns 200 with `{"status":"ok"}` iff the process can answer HTTP. No dependency
         checks — a failure here restarts the pod, so transient dep outages must not propagate.
@@ -64,7 +59,7 @@ paths:
   /status/ready:
     get:
       tags: [status]
-      summary: Kubelet readiness probe
+      summary: Readiness probe
       description: |
         Returns 200 iff all critical dep checks in the cached snapshot pass. Reads only
         the cached snapshot so it returns immediately regardless of dep RTT. Fails closed
@@ -113,7 +108,7 @@ paths:
         Our own deploy / release / build notifier called by GHA `notify` jobs. Renders a
         Discord embed in the dev channel.
 
-        Auth: `Authorization: Bearer <GHA_WEBHOOK_TOKEN>` (constant-time compare).
+        Auth: `Authorization: Bearer <BOT_WEBHOOK_TOKEN>` (constant-time compare).
 
         Deduplication: shared middleware keys on `X-Webhook-Id` against Redis (24h TTL);
         duplicates return `200 {"status":"duplicate"}` without posting to Discord.
@@ -231,7 +226,7 @@ components:
       scheme: bearer
       description: |
         Shared secret for our own GHA notifier; sent as `Authorization: Bearer <token>`
-        and constant-time compared against `GHA_WEBHOOK_TOKEN`.
+        and constant-time compared against `BOT_WEBHOOK_TOKEN`.
     githubHMAC:
       type: apiKey
       in: header
