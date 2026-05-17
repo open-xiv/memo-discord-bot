@@ -72,10 +72,23 @@ func InitDB() {
 // Grafana as a flapping database check. 30s was picked one order of
 // magnitude under the 5min idle timeouts so a single missed tick still
 // leaves margin.
+//
+// Self-heal: this also catches the "pool full of half-open conns" failure
+// mode, where pgx holds connections it believes are established but whose
+// TCP path is dead (typically: new pod's first NAT conntrack entries get
+// wedged after a rollout, every PingContext writes to a socket that never
+// gets a reply). The keepalive ping itself can't recover from that — it
+// just observes it. After failuresBeforeFatal consecutive misses (~90s of
+// confirmed-broken DB) we Fatal so the kubelet restarts the pod, which
+// rebuilds NAT state and the pool from scratch. This is the same recovery
+// path manual `kubectl rollout restart` exercises today.
 func StartKeepalive(parent context.Context) {
+	const failuresBeforeFatal = 3
+
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
+		consecutive := 0
 		for {
 			select {
 			case <-parent.Done():
@@ -87,10 +100,17 @@ func StartKeepalive(parent context.Context) {
 					continue
 				}
 				ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-				if err := sqlDB.PingContext(ctx); err != nil {
-					log.Warn().Str("event", "db.keepalive_failed").Err(err).Msg("keepalive ping failed")
-				}
+				err = sqlDB.PingContext(ctx)
 				cancel()
+				if err == nil {
+					consecutive = 0
+					continue
+				}
+				consecutive++
+				log.Warn().Str("event", "db.keepalive_failed").Int("consecutive", consecutive).Err(err).Msg("keepalive ping failed")
+				if consecutive >= failuresBeforeFatal {
+					log.Fatal().Str("event", "db.keepalive_fatal").Int("consecutive", consecutive).Msg("db keepalive failed repeatedly; exiting to force pod restart")
+				}
 			}
 		}
 	}()
