@@ -57,3 +57,41 @@ func InitDB() {
 		log.Fatal().Err(err).Msg("failed to auto migrate database")
 	}
 }
+
+// StartKeepalive keeps one DB connection warm in the pool with a SELECT-1-
+// shaped ping every 30s. memo-docs/standards/observability.md "Dependency
+// pool warmth" — DO NOT REMOVE without reading that section first.
+//
+// memo-discord-bot is event-driven: Discord interactions arrive in bursts,
+// most of the day the pool sits idle. SetConnMaxIdleTime(2m) closes idle
+// conns, and Cloud SQL / NAT conntrack also reap idle 5-tuples on their
+// own ~5min timer. Without this goroutine every /status refresh tick was
+// paying a full cold handshake (TCP + TLS for sslmode=require + PG STARTUP)
+// over WG mesh0 → droplet-hk NAT → VPC peering → Cloud SQL, which was
+// timing out the 5s probe budget ~50% of the time and showing up in
+// Grafana as a flapping database check. 30s was picked one order of
+// magnitude under the 5min idle timeouts so a single missed tick still
+// leaves margin.
+func StartKeepalive(parent context.Context) {
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-parent.Done():
+				return
+			case <-t.C:
+				sqlDB, err := DB.DB()
+				if err != nil {
+					log.Warn().Str("event", "db.keepalive_failed").Err(err).Msg("keepalive: failed to get sql.DB")
+					continue
+				}
+				ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+				if err := sqlDB.PingContext(ctx); err != nil {
+					log.Warn().Str("event", "db.keepalive_failed").Err(err).Msg("keepalive ping failed")
+				}
+				cancel()
+			}
+		}
+	}()
+}
