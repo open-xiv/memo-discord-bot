@@ -3,7 +3,7 @@
 // Webhook layout (single ingress, per-source path, per-source auth):
 //
 //	POST /webhook/gha     ← our own GitHub Actions deploy notifier
-//	                        auth: Bearer GHA_WEBHOOK_TOKEN
+//	                        auth: Bearer BOT_WEBHOOK_TOKEN
 //	POST /webhook/github  ← GitHub repo events (release / push / etc.)
 //	                        auth: HMAC-SHA256 GITHUB_WEBHOOK_SECRET
 //
@@ -132,9 +132,9 @@ type ghaPayload struct {
 }
 
 func handleGHA(c *gin.Context) {
-	expected := os.Getenv("GHA_WEBHOOK_TOKEN")
+	expected := os.Getenv("BOT_WEBHOOK_TOKEN")
 	if expected == "" {
-		log.Error().Msg("GHA_WEBHOOK_TOKEN not configured")
+		log.Error().Msg("BOT_WEBHOOK_TOKEN not configured")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "not configured"})
 		return
 	}

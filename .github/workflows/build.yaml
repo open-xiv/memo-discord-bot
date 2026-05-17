@@ -1,4 +1,4 @@
-name: build-and-deploy
+name: Build image
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
     paths-ignore:
       - "**/*.md"
       - ".gitignore"
-      - "k8s/**"
   workflow_dispatch:
 
 env:
@@ -67,38 +66,39 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
+  dispatch-deploy:
     needs: build
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: azure/setup-kubectl@v4
+      - uses: actions/create-github-app-token@v2
+        id: ops-token
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: 'memo-ops'
 
-      - name: Configure kubeconfig
-        env:
-          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
-        run: |
-          mkdir -p "$HOME/.kube"
-          printf '%s' "$KUBECONFIG_DATA" > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
-
-      - name: Roll deployment
-        env:
-          IMAGE_REF: ${{ env.IMAGE }}:${{ needs.build.outputs.tag }}
-        run: |
-          set -euo pipefail
-          kubectl -n memo set image deploy/memo-discord-bot app="$IMAGE_REF"
-          kubectl -n memo rollout status deploy/memo-discord-bot --timeout=240s
-          kubectl -n memo get pods -l app=memo-discord-bot -o wide
+      - uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.ops-token.outputs.token }}
+          repository: open-xiv/memo-ops
+          event-type: deploy-memo-discord-bot
+          client-payload: |
+            {
+              "image_tag": "${{ needs.build.outputs.tag }}",
+              "version": "${{ needs.build.outputs.version }}"
+            }
 
   notify:
-    needs: [build, deploy]
+    needs: build
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Compute overall status
+      - name: Compute status
         id: s
         run: |
-          if [[ "${{ needs.build.result }}" == "success" && "${{ needs.deploy.result }}" == "success" ]]; then
+          if [[ "${{ needs.build.result }}" == "success" ]]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failure" >> "$GITHUB_OUTPUT"
@@ -108,9 +108,9 @@ jobs:
         with:
           status: ${{ steps.s.outputs.status }}
           service: memo-discord-bot
-          kind: deploy
+          kind: build
           version: ${{ needs.build.outputs.version }}
-          cluster: sumemo-us
+          cluster: ''
           build: ${{ needs.build.result }}
-          deploy: ${{ needs.deploy.result }}
-          webhook_token: ${{ secrets.GHA_WEBHOOK_TOKEN }}
+          webhook_url: ${{ secrets.BOT_WEBHOOK_URL }}
+          webhook_token: ${{ secrets.BOT_WEBHOOK_TOKEN }}
