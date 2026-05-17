@@ -200,8 +200,11 @@ var deployStyles = map[string]deployStyle{
 
 // buildDeployEmbed renders a GHA deploy notification as a GitHub-style
 // status card: author block (service name + org avatar + repo link),
-// title (status headline), three inline data fields (Version / Server /
+// title (status headline), inline data fields (Version, optional Server,
 // Commit), and a footer with the macaron status icon + repo path.
+// Server is shown only when the caller supplies a non-empty `cluster`;
+// otherwise the field is omitted (cluster labels carry deploy-topology
+// hints we'd rather not surface by default).
 // embed.Timestamp is set so each viewer sees the absolute time
 // localized to their timezone in the footer's right edge.
 func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
@@ -238,11 +241,6 @@ func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
 	}
 	if version == "" {
 		version = "(unknown)"
-	}
-
-	cluster := p.Cluster
-	if cluster == "" {
-		cluster = "?"
 	}
 
 	short := p.Commit
@@ -288,17 +286,24 @@ func buildDeployEmbed(p ghaPayload) *discordgo.MessageEmbed {
 		},
 		Title: style.Title,
 		Color: style.Color,
-		Fields: []*discordgo.MessageEmbedField{
-			{Name: "Version", Value: "`" + version + "`", Inline: true},
-			{Name: "Server", Value: "`" + cluster + "`", Inline: true},
-			{Name: "Commit", Value: commitField, Inline: true},
-		},
+		Fields: buildDeployFields(version, p.Cluster, commitField),
 		Footer: &discordgo.MessageEmbedFooter{
 			Text:    footerText,
 			IconURL: footerIcon,
 		},
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+func buildDeployFields(version, cluster, commitField string) []*discordgo.MessageEmbedField {
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Version", Value: "`" + version + "`", Inline: true},
+	}
+	if cluster != "" {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Server", Value: "`" + cluster + "`", Inline: true})
+	}
+	fields = append(fields, &discordgo.MessageEmbedField{Name: "Commit", Value: commitField, Inline: true})
+	return fields
 }
 
 // ----------------------------------------------------------------------
