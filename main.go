@@ -28,12 +28,16 @@ func main() {
 	bot.Start()
 	defer bot.Stop()
 
-	// background goroutine — refresh /status dep checks (database, redis,
-	// discord-gateway). readiness probes read the cached snapshot, never
-	// pinging inline. ctx is cancelled on SIGINT/SIGTERM below.
+	// background goroutines — both cancelled on SIGINT/SIGTERM below.
+	//   StartHealthRefresher: refreshes the /status dep snapshot every 15s
+	//     so readiness probes are O(1).
+	//   StartKeepalive: keeps one DB conn warm in the pool. mandatory for
+	//     this service — see memo-docs/standards/observability.md
+	//     "Dependency pool warmth".
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	api.StartHealthRefresher(ctx)
+	flow.StartKeepalive(ctx)
 
 	go func() {
 		r := gin.New()
