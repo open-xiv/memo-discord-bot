@@ -2,6 +2,8 @@ package bot
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/open-xiv/memo-discord-bot/flow"
@@ -10,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var CommandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){}
+var CommandHandlers = map[string]Handler{}
 
 func Start() {
 	s := flow.Discord
@@ -18,6 +20,7 @@ func Start() {
 	RegisterBindHandlers()
 	RegisterLogsHandlers()
 	RegisterSyncHandlers()
+	RegisterAdminHandlers()
 
 	// pre-create metric label series at 0 so PromQL increase() over a window
 	// has both endpoints from the start — without this the series is born at
@@ -26,22 +29,23 @@ func Start() {
 	warmSessionEventLabels()
 
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		c := newCtx(s, i)
 		switch i.Type {
 		case discordgo.InteractionApplicationCommand:
 			name := i.ApplicationCommandData().Name
 			metrics.InteractionsTotal.WithLabelValues("app_command", name).Inc()
 			if h, ok := CommandHandlers[name]; ok {
-				h(s, i)
+				h(c)
 			}
 		case discordgo.InteractionMessageComponent:
 			metrics.InteractionsTotal.WithLabelValues("component", "").Inc()
-			handleComponentInteraction(s, i)
+			handleComponentInteraction(c)
 		case discordgo.InteractionModalSubmit:
 			metrics.InteractionsTotal.WithLabelValues("modal", "").Inc()
-			handleModalSubmit(s, i)
+			handleModalSubmit(c)
 		case discordgo.InteractionApplicationCommandAutocomplete:
 			metrics.InteractionsTotal.WithLabelValues("autocomplete", i.ApplicationCommandData().Name).Inc()
-			handleAutocomplete(s, i)
+			handleAutocomplete(c)
 		}
 	})
 
@@ -117,20 +121,21 @@ func registerCommands(s *discordgo.Session) {
 	}
 }
 
-func handleComponentInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	data := i.MessageComponentData()
+func handleComponentInteraction(c *Ctx) {
+	data := c.I.MessageComponentData()
 
 	switch data.CustomID {
 	case "unbind_select":
-		handleUnbindSelect(s, i)
+		handleUnbindSelect(c)
 	case "hidden_select":
-		handleHiddenSelect(s, i)
+		handleHiddenSelect(c)
 	case "logs_update", "logs_cancel":
-		handleLogsButton(s, i)
+		handleLogsButton(c)
 	}
 }
 
-func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func handleUnbindSelect(c *Ctx) {
+	s, i := c.S, c.I
 	data := i.MessageComponentData()
 
 	if len(data.Values) == 0 {
@@ -138,7 +143,7 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	memberID := data.Values[0]
-	discordID := i.Member.User.ID
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
@@ -175,15 +180,29 @@ func handleUnbindSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Msg("user unbind success")
 }
 
-func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func handleHiddenSelect(c *Ctx) {
+	s, i := c.S, c.I
 	data := i.MessageComponentData()
 
 	if len(data.Values) == 0 {
 		return
 	}
 
-	memberID := data.Values[0]
-	discordID := i.Member.User.ID
+	parts := strings.SplitN(data.Values[0], ":", 2)
+	if len(parts) != 2 {
+		return
+	}
+	lvl, convErr := strconv.Atoi(parts[0])
+	if convErr != nil {
+		return
+	}
+	newPrivacy := model.Privacy(lvl)
+	if newPrivacy != model.PrivacyPublic && newPrivacy != model.PrivacyUnranked {
+		respondError(s, i, "无效的状态")
+		return
+	}
+	memberID := parts[1]
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
@@ -209,23 +228,17 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	newHiddenStatus := !member.Hidden
-	err = flow.DB.Model(&member).Update("hidden", newHiddenStatus).Error
+	err = flow.DB.Model(&member).Update("privacy", int(newPrivacy)).Error
 	if err != nil {
-		log.Error().Err(err).Str("name", member.Name).Str("server", member.Server).Msg("toggle hidden status failed")
-		respondError(s, i, "无法修改隐藏状态 内部错误")
+		log.Error().Err(err).Str("name", member.Name).Str("server", member.Server).Msg("set privacy failed")
+		respondError(s, i, "无法修改状态 内部错误")
 		return
-	}
-
-	statusText := "显示"
-	if newHiddenStatus {
-		statusText = "隐藏"
 	}
 
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    fmt.Sprintf("✅ 已将 %s@%s 设为 %s", member.Name, member.Server, statusText),
+			Content:    fmt.Sprintf("✅ 已将 %s@%s 设为 %s", member.Name, member.Server, privacyLabel(newPrivacy)),
 			Components: []discordgo.MessageComponent{},
 		},
 	})
@@ -233,15 +246,15 @@ func handleHiddenSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Bool("hidden", newHiddenStatus).Msg("toggle hidden status success")
+	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Int("privacy", int(newPrivacy)).Msg("set privacy success")
 }
 
-func handleModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	data := i.ModalSubmitData()
+func handleModalSubmit(c *Ctx) {
+	data := c.I.ModalSubmitData()
 
 	switch data.CustomID {
 	case "logs_modal":
-		handleLogsModal(s, i)
+		handleLogsModal(c)
 	}
 }
 

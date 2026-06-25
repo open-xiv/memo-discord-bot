@@ -20,8 +20,19 @@ var servers = []string{
 	"水晶塔", "银泪湖", "太阳海岸", "伊修加德", "红茶川",
 }
 
-func handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func handleAutocomplete(c *Ctx) {
+	s, i := c.S, c.I
 	data := i.ApplicationCommandData()
+
+	// set-hide is dev-only; deny non-dev callers any suggestions so the member
+	// roster isn't leaked even if the command stays visible to them.
+	if data.Name == "set-hide" && !c.Identity.IsDev() {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{},
+		})
+		return
+	}
 
 	var focusedOption *discordgo.ApplicationCommandInteractionDataOption
 	for _, opt := range data.Options {

@@ -26,8 +26,9 @@ func validateKey(clientID, clientSecret string) error {
 	return err
 }
 
-func handleLogs(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	discordID := i.Member.User.ID
+func handleLogs(c *Ctx) {
+	s, i := c.S, c.I
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
@@ -67,14 +68,15 @@ func handleLogs(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			return
 		}
 	} else if errors.Is(err, gorm.ErrRecordNotFound) {
-		showLogsModal(s, i, false)
+		showLogsModal(c, false)
 	} else {
 		log.Error().Err(err).Msg("logs key bind failed (create)")
 		respondError(s, i, "无法绑定同步服务 内部错误")
 	}
 }
 
-func showLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate, isUpdate bool) {
+func showLogsModal(c *Ctx, isUpdate bool) {
+	s, i := c.S, c.I
 	title := "设置 FFLogs 同步服务"
 	if isUpdate {
 		title = "更新 FFLogs 同步服务"
@@ -122,7 +124,8 @@ func showLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate, isUpdat
 	}
 }
 
-func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func handleLogsModal(c *Ctx) {
+	s, i := c.S, c.I
 	data := i.ModalSubmitData()
 
 	var clientID, clientSecret string
@@ -146,7 +149,7 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	discordID := i.Member.User.ID
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
@@ -202,12 +205,13 @@ func handleLogsModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-func handleLogsButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func handleLogsButton(c *Ctx) {
+	s, i := c.S, c.I
 	data := i.MessageComponentData()
 
 	switch data.CustomID {
 	case "logs_update":
-		showLogsModal(s, i, true)
+		showLogsModal(c, true)
 	case "logs_cancel":
 		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,

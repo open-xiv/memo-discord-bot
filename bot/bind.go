@@ -16,10 +16,22 @@ func RegisterBindHandlers() {
 	CommandHandlers["bind"] = handleBind
 	CommandHandlers["unbind"] = handleUnbind
 	CommandHandlers["list"] = handleList
-	CommandHandlers["hidden"] = handleHidden
+	CommandHandlers["hide"] = handleHidden
 }
 
-func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func privacyLabel(p model.Privacy) string {
+	switch p {
+	case model.PrivacyUnranked:
+		return "不上榜"
+	case model.PrivacyHidden:
+		return "隐藏"
+	default:
+		return "公开"
+	}
+}
+
+func handleBind(c *Ctx) {
+	s, i := c.S, c.I
 	options := i.ApplicationCommandData().Options
 	optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
 	for _, opt := range options {
@@ -28,7 +40,7 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	name := strings.TrimSpace(optionMap["name"].StringValue())
 	server := strings.TrimSpace(optionMap["server"].StringValue())
-	discordID := i.Member.User.ID
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Where("discord_id = ?", discordID).FirstOrCreate(&user, model.User{
@@ -80,8 +92,9 @@ func handleBind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	respondSuccess(s, i, msg)
 }
 
-func handleUnbind(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	discordID := i.Member.User.ID
+func handleUnbind(c *Ctx) {
+	s, i := c.S, c.I
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Preload("Members").Where("discord_id = ?", discordID).First(&user).Error
@@ -123,8 +136,9 @@ func handleUnbind(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-func handleList(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	discordID := i.Member.User.ID
+func handleList(c *Ctx) {
+	s, i := c.S, c.I
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Preload("Members").Where("discord_id = ?", discordID).First(&user).Error
@@ -135,13 +149,13 @@ func handleList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	fields := make([]*discordgo.MessageEmbedField, 0, len(user.Members))
 	for idx, member := range user.Members {
-		hiddenStatus := ""
-		if member.Hidden {
-			hiddenStatus = " 🔒"
+		suffix := ""
+		if member.Privacy >= model.PrivacyUnranked {
+			suffix = fmt.Sprintf(" (%s)", privacyLabel(member.Privacy))
 		}
 		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:   fmt.Sprintf("%d. %s%s", idx+1, member.Name, hiddenStatus),
-			Value:  fmt.Sprintf("%s", member.Server),
+			Name:   fmt.Sprintf("%d. %s%s", idx+1, member.Name, suffix),
+			Value:  member.Server,
 			Inline: true,
 		})
 	}
@@ -166,8 +180,9 @@ func handleList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-func handleHidden(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	discordID := i.Member.User.ID
+func handleHidden(c *Ctx) {
+	s, i := c.S, c.I
+	discordID := c.DiscordID()
 
 	var user model.User
 	err := flow.DB.Preload("Members").Where("discord_id = ?", discordID).First(&user).Error
@@ -176,30 +191,34 @@ func handleHidden(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	options := make([]discordgo.SelectMenuOption, len(user.Members))
-	for idx, member := range user.Members {
-		hiddenStatus := "显示"
-		if member.Hidden {
-			hiddenStatus = "隐藏"
-		}
-		options[idx] = discordgo.SelectMenuOption{
-			Label:       fmt.Sprintf("[%d] %s@%s", idx+1, member.Name, member.Server),
-			Value:       fmt.Sprintf("%d", member.ID),
-			Description: fmt.Sprintf("当前状态: %s", hiddenStatus),
-		}
+	options := make([]discordgo.SelectMenuOption, 0, len(user.Members)*2)
+	for _, member := range user.Members {
+		cur := fmt.Sprintf("当前: %s", privacyLabel(member.Privacy))
+		options = append(options,
+			discordgo.SelectMenuOption{
+				Label:       fmt.Sprintf("%s@%s → 公开", member.Name, member.Server),
+				Value:       fmt.Sprintf("%d:%d", model.PrivacyPublic, member.ID),
+				Description: cur,
+			},
+			discordgo.SelectMenuOption{
+				Label:       fmt.Sprintf("%s@%s → 不上榜", member.Name, member.Server),
+				Value:       fmt.Sprintf("%d:%d", model.PrivacyUnranked, member.ID),
+				Description: cur,
+			},
+		)
 	}
 
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "选择要修改隐藏状态的角色",
+			Content: "选择角色与目标状态：",
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
 						discordgo.SelectMenu{
 							CustomID:    "hidden_select",
-							Placeholder: "请选择一名角色",
+							Placeholder: "请选择角色与状态",
 							Options:     options,
 						},
 					},
