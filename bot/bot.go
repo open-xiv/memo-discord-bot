@@ -111,14 +111,13 @@ func removeGlobalCommands(s *discordgo.Session) {
 }
 
 func registerCommands(s *discordgo.Session) {
-	for _, cmd := range Commands {
-		_, err := s.ApplicationCommandCreate(s.State.User.ID, GuildID, cmd)
-		if err != nil {
-			log.Error().Err(err).Str("command", cmd.Name).Msg("discord bot command registration failed")
-		} else {
-			log.Info().Str("command", cmd.Name).Msg("discord bot command registered")
-		}
+	// one atomic call: avoids per-command create rate limits and prunes stale
+	// (renamed) guild commands that per-command Create would otherwise leave.
+	if _, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, GuildID, Commands); err != nil {
+		log.Error().Err(err).Msg("discord bot command registration failed")
+		return
 	}
+	log.Info().Int("count", len(Commands)).Msg("discord bot commands registered")
 }
 
 func handleComponentInteraction(c *Ctx) {
