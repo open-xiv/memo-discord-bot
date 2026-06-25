@@ -24,10 +24,6 @@ func main() {
 	flow.InitDB()
 	flow.InitRedis()
 
-	flow.InitDiscord()
-	bot.Start()
-	defer bot.Stop()
-
 	// background goroutines — both cancelled on SIGINT/SIGTERM below.
 	//   StartHealthRefresher: refreshes the /status dep snapshot every 15s
 	//     so readiness probes are O(1).
@@ -39,6 +35,9 @@ func main() {
 	api.StartHealthRefresher(ctx)
 	flow.StartKeepalive(ctx)
 
+	// Serve health/metrics before connecting Discord: bot.Start() registers
+	// slash commands synchronously and Discord rate-limits command writes, so
+	// gating the :8080 bind on it would fail the liveness probe and crash-loop.
 	go func() {
 		r := gin.New()
 		r.Use(gin.Recovery())
@@ -63,6 +62,10 @@ func main() {
 			log.Fatal().Msgf("failed to run server: %v", err)
 		}
 	}()
+
+	flow.InitDiscord()
+	bot.Start()
+	defer bot.Stop()
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
