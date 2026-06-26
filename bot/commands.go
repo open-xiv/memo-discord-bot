@@ -44,7 +44,7 @@ var Commands = []*discordgo.ApplicationCommand{
 	},
 	{
 		Name:        "hide",
-		Description: "设置已绑定角色：公开 / 不上榜 / 隐藏 (隐藏限一个角色)",
+		Description: "设置已绑定角色的隐私：公开 / 不上榜 / 隐藏 (可多选)",
 	},
 	{
 		Name:                     "set-hide",

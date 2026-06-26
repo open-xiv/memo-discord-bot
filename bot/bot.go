@@ -123,11 +123,16 @@ func registerCommands(s *discordgo.Session) {
 func handleComponentInteraction(c *Ctx) {
 	data := c.I.MessageComponentData()
 
+	if strings.HasPrefix(data.CustomID, "hide_level:") {
+		handleHideLevel(c)
+		return
+	}
+
 	switch data.CustomID {
 	case "unbind_select":
 		handleUnbindSelect(c)
-	case "hidden_select":
-		handleHiddenSelect(c)
+	case "hide_members":
+		handleHideMembers(c)
 	case "logs_update", "logs_cancel":
 		handleLogsButton(c)
 	}
@@ -179,7 +184,9 @@ func handleUnbindSelect(c *Ctx) {
 	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Msg("user unbind success")
 }
 
-func handleHiddenSelect(c *Ctx) {
+// handleHideMembers is round 1 of /hide: the user multi-selected bound members;
+// carry their ids into the level select's customID for round 2.
+func handleHideMembers(c *Ctx) {
 	s, i := c.S, c.I
 	data := i.MessageComponentData()
 
@@ -187,11 +194,43 @@ func handleHiddenSelect(c *Ctx) {
 		return
 	}
 
-	parts := strings.SplitN(data.Values[0], ":", 2)
-	if len(parts) != 2 {
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("已选 %d 个角色，选择目标状态：", len(data.Values)),
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:    "hide_level:" + strings.Join(data.Values, ","),
+							Placeholder: "请选择目标状态",
+							Options: []discordgo.SelectMenuOption{
+								{Label: "公开", Value: fmt.Sprintf("%d", model.PrivacyPublic)},
+								{Label: "不上榜", Value: fmt.Sprintf("%d", model.PrivacyUnranked)},
+								{Label: "隐藏", Value: fmt.Sprintf("%d", model.PrivacyHidden)},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("hide level select failed")
+	}
+}
+
+// handleHideLevel is round 2 of /hide: apply the chosen level to every selected
+// member that the caller actually has bound. No cap — the 3-bind limit bounds it.
+func handleHideLevel(c *Ctx) {
+	s, i := c.S, c.I
+	data := i.MessageComponentData()
+
+	if len(data.Values) == 0 {
 		return
 	}
-	lvl, convErr := strconv.Atoi(parts[0])
+
+	lvl, convErr := strconv.Atoi(data.Values[0])
 	if convErr != nil {
 		return
 	}
@@ -200,56 +239,38 @@ func handleHiddenSelect(c *Ctx) {
 		respondError(s, i, "无效的状态")
 		return
 	}
-	memberID := parts[1]
+
+	memberIDs := strings.Split(strings.TrimPrefix(data.CustomID, "hide_level:"), ",")
 	discordID := c.DiscordID()
 
 	var user model.User
-	err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error
-	if err != nil {
+	if err := flow.DB.Where("discord_id = ?", discordID).First(&user).Error; err != nil {
 		respondError(s, i, "目前没有绑定的角色 使用 `/bind` 绑定一个角色")
 		return
 	}
 
-	var member model.Member
-	err = flow.DB.First(&member, memberID).Error
-	if err != nil {
-		respondError(s, i, "角色不存在")
-		return
-	}
-
-	var existingCount int64
-	flow.DB.Table("user_members").
-		Where("user_id = ? AND member_id = ?", user.ID, member.ID).
-		Count(&existingCount)
-
-	if existingCount == 0 {
-		respondError(s, i, "你没有绑定这个角色")
-		return
-	}
-
-	if newPrivacy == model.PrivacyHidden {
-		var alreadyHidden int64
-		flow.DB.Table("user_members AS um").
-			Joins("JOIN members m ON m.id = um.member_id").
-			Where("um.user_id = ? AND m.id <> ? AND m.privacy >= ?", user.ID, member.ID, int(model.PrivacyHidden)).
-			Count(&alreadyHidden)
-		if alreadyHidden > 0 {
-			respondError(s, i, "最多只能完全隐藏一个角色，请先把已隐藏的角色改回公开 / 不上榜")
-			return
+	updated := 0
+	for _, idStr := range memberIDs {
+		mid, e := strconv.Atoi(idStr)
+		if e != nil {
+			continue
+		}
+		var bound int64
+		flow.DB.Table("user_members").
+			Where("user_id = ? AND member_id = ?", user.ID, mid).
+			Count(&bound)
+		if bound == 0 {
+			continue
+		}
+		if err := flow.DB.Model(&model.Member{}).Where("id = ?", mid).Update("privacy", int(newPrivacy)).Error; err == nil {
+			updated++
 		}
 	}
 
-	err = flow.DB.Model(&member).Update("privacy", int(newPrivacy)).Error
-	if err != nil {
-		log.Error().Err(err).Str("name", member.Name).Str("server", member.Server).Msg("set privacy failed")
-		respondError(s, i, "无法修改状态 内部错误")
-		return
-	}
-
-	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    fmt.Sprintf("✅ 已将 %s@%s 设为 %s", member.Name, member.Server, privacyLabel(newPrivacy)),
+			Content:    fmt.Sprintf("✅ 已将 %d 个角色设为 %s", updated, privacyLabel(newPrivacy)),
 			Components: []discordgo.MessageComponent{},
 		},
 	})
@@ -257,7 +278,7 @@ func handleHiddenSelect(c *Ctx) {
 		return
 	}
 
-	log.Info().Str("discord_id", discordID).Str("name", member.Name).Str("server", member.Server).Int("privacy", int(newPrivacy)).Msg("set privacy success")
+	log.Info().Str("discord_id", discordID).Int("count", updated).Int("privacy", int(newPrivacy)).Msg("set privacy (batch) success")
 }
 
 func handleModalSubmit(c *Ctx) {

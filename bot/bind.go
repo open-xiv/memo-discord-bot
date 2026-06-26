@@ -191,39 +191,29 @@ func handleHidden(c *Ctx) {
 		return
 	}
 
-	options := make([]discordgo.SelectMenuOption, 0, len(user.Members)*3)
-	for _, member := range user.Members {
-		cur := fmt.Sprintf("当前: %s", privacyLabel(member.Privacy))
-		options = append(options,
-			discordgo.SelectMenuOption{
-				Label:       fmt.Sprintf("%s@%s → 公开", member.Name, member.Server),
-				Value:       fmt.Sprintf("%d:%d", model.PrivacyPublic, member.ID),
-				Description: cur,
-			},
-			discordgo.SelectMenuOption{
-				Label:       fmt.Sprintf("%s@%s → 不上榜", member.Name, member.Server),
-				Value:       fmt.Sprintf("%d:%d", model.PrivacyUnranked, member.ID),
-				Description: cur,
-			},
-			discordgo.SelectMenuOption{
-				Label:       fmt.Sprintf("%s@%s → 隐藏", member.Name, member.Server),
-				Value:       fmt.Sprintf("%d:%d", model.PrivacyHidden, member.ID),
-				Description: cur,
-			},
-		)
+	options := make([]discordgo.SelectMenuOption, len(user.Members))
+	for idx, member := range user.Members {
+		options[idx] = discordgo.SelectMenuOption{
+			Label:       fmt.Sprintf("%s@%s", member.Name, member.Server),
+			Value:       fmt.Sprintf("%d", member.ID),
+			Description: fmt.Sprintf("当前: %s", privacyLabel(member.Privacy)),
+		}
 	}
 
+	minValues := 1
 	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "选择角色与目标状态：",
+			Content: "选择要设置的角色（可多选）：",
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
 						discordgo.SelectMenu{
-							CustomID:    "hidden_select",
-							Placeholder: "请选择角色与状态",
+							CustomID:    "hide_members",
+							Placeholder: "请选择角色（可多选）",
+							MinValues:   &minValues,
+							MaxValues:   len(options),
 							Options:     options,
 						},
 					},
