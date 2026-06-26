@@ -31,7 +31,7 @@ docker compose up -d        # 起本地 pg / redis
 | `/unbind` | 解绑 |
 | `/list` | 列出已绑定角色 |
 | `/logs` | 触发 FFLogs 同步 |
-| `/hide` | 设置已绑定角色的隐私（公开 / 不上榜） |
+| `/hide` | 设置已绑定角色的隐私（公开 / 不上榜 / 隐藏，隐藏限一个角色） |
 | `/set-hide` | 管理：设置任意角色的隐私等级（公开 / 不上榜 / 隐藏） |
 
 ### Endpoints

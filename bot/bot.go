@@ -196,7 +196,7 @@ func handleHiddenSelect(c *Ctx) {
 		return
 	}
 	newPrivacy := model.Privacy(lvl)
-	if newPrivacy != model.PrivacyPublic && newPrivacy != model.PrivacyUnranked {
+	if newPrivacy < model.PrivacyPublic || newPrivacy > model.PrivacyHidden {
 		respondError(s, i, "无效的状态")
 		return
 	}
@@ -225,6 +225,18 @@ func handleHiddenSelect(c *Ctx) {
 	if existingCount == 0 {
 		respondError(s, i, "你没有绑定这个角色")
 		return
+	}
+
+	if newPrivacy == model.PrivacyHidden {
+		var alreadyHidden int64
+		flow.DB.Table("user_members AS um").
+			Joins("JOIN members m ON m.id = um.member_id").
+			Where("um.user_id = ? AND m.id <> ? AND m.privacy >= ?", user.ID, member.ID, int(model.PrivacyHidden)).
+			Count(&alreadyHidden)
+		if alreadyHidden > 0 {
+			respondError(s, i, "最多只能完全隐藏一个角色，请先把已隐藏的角色改回公开 / 不上榜")
+			return
+		}
 	}
 
 	err = flow.DB.Model(&member).Update("privacy", int(newPrivacy)).Error

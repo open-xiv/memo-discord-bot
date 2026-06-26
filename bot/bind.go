@@ -191,7 +191,7 @@ func handleHidden(c *Ctx) {
 		return
 	}
 
-	options := make([]discordgo.SelectMenuOption, 0, len(user.Members)*2)
+	options := make([]discordgo.SelectMenuOption, 0, len(user.Members)*3)
 	for _, member := range user.Members {
 		cur := fmt.Sprintf("当前: %s", privacyLabel(member.Privacy))
 		options = append(options,
@@ -203,6 +203,11 @@ func handleHidden(c *Ctx) {
 			discordgo.SelectMenuOption{
 				Label:       fmt.Sprintf("%s@%s → 不上榜", member.Name, member.Server),
 				Value:       fmt.Sprintf("%d:%d", model.PrivacyUnranked, member.ID),
+				Description: cur,
+			},
+			discordgo.SelectMenuOption{
+				Label:       fmt.Sprintf("%s@%s → 隐藏", member.Name, member.Server),
+				Value:       fmt.Sprintf("%d:%d", model.PrivacyHidden, member.ID),
 				Description: cur,
 			},
 		)
